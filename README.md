@@ -1,47 +1,64 @@
 # hwmonitor-fnos
 
-Minisforum N5 在 fnOS 上使用 `ltdstudio/hwmonitor` 的内核适配构建仓库。
+Minisforum N5 系列在 fnOS 上使用 `ltdstudio/hwmonitor` 的内核适配构建仓库。
 
-本仓库不长期复制/分叉 hwmonitor 业务代码，而采用 **上游锁定 + 驱动覆盖 + 可复现打包**：
+本仓库采用 **上游锁定 + 驱动覆盖 + 可复现打包**，避免长期分叉 hwmonitor 业务代码。
 
-1. 固定 `ltdstudio/hwmonitor` v1.5.1 的 commit。
-2. **精确固定官方 v1.5.1 FPK 内 c938 驱动对应的 N5 0.1.0 源码 commit**，只针对新内核重编译。
-3. 在与 fnOS `6.18.18.c1032-trim` 匹配的构建镜像内重新编译 `minisforum_n5_it5571.ko`。
-4. 把新驱动加入 `app/drivers/n5/`，保留上游已有的 c938 驱动。
-5. 本地修复版本为 `1.5.3`，重新生成 FPK。
-6. CI 校验源码 blob、`version`、`srcversion`、`vermagic`，并明确拒绝误引入带 `experimental_write` 门禁的 0.2.x 驱动。
+## 当前适配
 
-## 当前目标
+- 机器：Minisforum N5A
+- DMI：`product_name=N5A`，`board_name=F8NAB`
+- fnOS kernel：`6.18.18.c1032-trim`
+- hwmonitor upstream：`v1.5.1`
+- N5 driver upstream：`0.2.0`
+- patched package：`1.5.4`
 
-- fnOS kernel: `6.18.18.c1032-trim`
-- hwmonitor upstream: `v1.5.1`
-- N5 driver behavior: `0.1.0`（与官方 c938 模块一致）
-- patched package version: `1.5.3`
-- target: `x86_64`
+## 为什么必须使用 0.2.0
 
-## 1.5.2 问题说明
+官方 hwmonitor v1.5.1 原有 c938 模块对应 0.1.0 驱动，但该版本只支持 `N5/F8NAA`，在 `N5A/F8NAB` 上会 `-ENODEV`，无法注册 hwmon 设备。
 
-最初的 1.5.2 误用了驱动仓库后续的 0.2.0 源码。0.2.0 新增了实验机型只读门禁，在未启用写权限时会隐藏 `pwmN` / `pwmN_enable` hwmon 节点。hwmonitor 前端只有在服务端检测到这些 PWM 节点时才显示「手动 / PWM自动 / BIOS」、滑条和曲线，因此会出现“温度/RPM 正常，但控制选项整体消失”的现象。
+0.2.0 增加了 `N5A/F8NAB` DMI profile，因此能够正确读取温度和风扇 RPM；但上游将该 profile 标记为实验机型，默认只读，并隐藏 PWM 节点。
 
-1.5.3 已恢复为官方 c938 模块所用的 0.1.0 源码，唯一目标变化是从 `6.18.18.c938-trim` 重编译到 `6.18.18.c1032-trim`。
+上游 0.2.0 已提供 `experimental_write=1` 模块参数用于在确认温度/RPM 数据合理后显式开启实验 PWM 写控制。
+
+## 1.5.4 做了什么
+
+1. 驱动源码保持上游 `0.2.0` 原样，不修改其 EC/PWM 控制实现。
+2. 针对 fnOS `6.18.18.c1032-trim` 重新编译 `.ko`。
+3. hwmonitor 加载器仅在 DMI 精确匹配以下条件时追加：
+   - `product_name = N5A` 或 `N5 AIR`
+   - `board_name = F8NAB`
+   - `experimental_write=1`
+4. 其他 N5/F8NAA 或其他机器仍保持上游默认行为。
+5. CI 校验 driver commit、source blob、`version`、`srcversion`、`vermagic`、`experimental_write` 参数以及 FPK 内最终加载器逻辑。
+
+## 固定版本
+
+- hwmonitor commit: `506ab0d316a2932e071f8102c2e7064b0b84feb5`
+- driver commit: `e47545166ac93e3c5769dcaef75ee6ec4dd5d95d`
+- driver source blob: `28484eba79bac7b5e65efa85cc48f27a87d5637e`
+- driver version: `0.2.0`
+- driver srcversion: `96E49785C432E4B85FAF416`
 
 ## 构建产物
 
 GitHub Actions 在 `main` 更新后自动构建：
 
-- `hwmonitor_1.5.3_x86.fpk`
+- `hwmonitor_1.5.4_x86.fpk`
 - `minisforum_n5_it5571-6.18.18.c1032-trim.ko`
-- `hwmonitor-fnos-1.5.3-source.tar.gz`
+- `hwmonitor-fnos-1.5.4-source.tar.gz`
 - `SHA256SUMS`
 - `build-info.txt`
 
-## 维护方式
+## 安全说明
 
-以后 fnOS 再升级内核时，优先只调整 `upstream.lock` / workflow 的目标内核与构建镜像，不修改 hwmonitor 的风扇控制业务逻辑。运行时继续使用上游的“内核版本精确匹配”安全门禁，禁止拿相近版本 `.ko` 冒充目标内核。
+`N5A/F8NAB` 的 PWM 写控制在上游驱动中仍被标记为 experimental。本仓库只是在已确认该机器温度/RPM 读取正常后使用上游预留的 `experimental_write=1` 开关，并没有把实验 profile 改成 validated。
+
+首次启用手动或曲线控制时应观察风扇 RPM 和温度变化；若出现通道对应错误、风扇停转或温度异常，应立即切回 BIOS 自动控制并卸载模块。
 
 ## 上游
 
 - https://github.com/ltdstudio/hwmonitor
 - https://github.com/ltdstudio/minisforum-n5-it5571
 
-驱动源码及生成内核模块遵循上游 GPL-2.0 许可；hwmonitor 本体遵循其上游仓库许可。本仓库仅提供 fnOS 内核适配及构建自动化，不改变上游版权归属。
+驱动源码及生成内核模块遵循上游 GPL-2.0 许可；本仓库仅提供 fnOS 内核适配及构建自动化，不改变上游版权归属。
