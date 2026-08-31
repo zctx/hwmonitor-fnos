@@ -1,0 +1,48 @@
+name: Build c1032 FPK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - upstream.lock
+      - .github/workflows/build-c1032.yml
+      - scripts/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: makedie/fnos:kernHead-6.18.18.c1032-trim-amd64
+
+    steps:
+      - name: Checkout adapter repo
+        uses: actions/checkout@v4
+
+      - name: Prepare tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates make gcc binutils kmod python3 tar gzip xz-utils
+
+      - name: Build patched FPK
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build.sh
+
+      - name: Upload build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: hwmonitor-fnos-c1032
+          if-no-files-found: error
+          path: |
+            dist/hwmonitor_1.5.2_x86.fpk
+            dist/minisforum_n5_it5571-6.18.18.c1032-trim.ko
+            dist/hwmonitor-fnos-1.5.2-source.tar.gz
+            dist/SHA256SUMS
+            dist/build-info.txt
