@@ -93,7 +93,13 @@ PY
 grep -Fq "insmodArgs.push('experimental_write=1')" "$DRIVERLOAD" || fail "N5A write-enable loader patch missing"
 grep -Fq "/^(N5A|N5 AIR)$/i.test(product) && /^F8NAB$/i.test(board)" "$DRIVERLOAD" || fail "N5A/F8NAB DMI gate missing"
 
-# 保留 hwmonitor 业务代码，仅调整本地包版本。
+# 应用层补丁：多 NVMe 温度路径绑定、存储风扇最低占空比、UI 显示真实自动温度源。
+python3 "$ROOT/scripts/patch-app.py" "$HWMON/app/server.js" "$HWMON/app/web/app.js"
+grep -Fq "const nvmeHwmons = listHwmon()" "$HWMON/app/server.js" || fail "NVMe hwmon binding patch missing"
+grep -Fq "storage fan safety floor" "$HWMON/app/server.js" || fail "storage fan safety floor missing"
+grep -Fq "const auto = f.autoSource || null" "$HWMON/app/web/app.js" || fail "UI autoSource patch missing"
+
+# 调整本地包版本。
 sed -i -E "s/^version[[:space:]]*=.*/version         = ${PACKAGE_VERSION}/" "$HWMON/manifest"
 python3 - "$HWMON/app/package.json" "$PACKAGE_VERSION" <<'PY'
 import json, sys
@@ -119,6 +125,8 @@ cat > "$HWMON/PATCH_INFO.md" <<EOF
 - module vermagic: ${VERMAGIC}
 - package version: ${PACKAGE_VERSION}
 - N5A/F8NAB: load upstream 0.2.0 with experimental_write=1
+- NVMe temperature: bind block device to matching nvme hwmon through sysfs device path
+- storage fan safety floor: 77/255 when in software curve mode
 
 The kernel driver source is unmodified. The application loader passes the upstream
 experimental_write=1 module parameter only when DMI is exactly N5A/N5 AIR + F8NAB.
@@ -134,7 +142,7 @@ FPK="$HWMON/hwmonitor_${PACKAGE_VERSION}_x86.fpk"
 [ -f "$FPK" ] || fail "FPK not produced"
 cp "$FPK" "$DIST/"
 
-# 反向解包成品，确认目标 ko 和 N5A 参数加载逻辑都真正进入 FPK。
+# 反向解包成品，确认目标 ko 和本地补丁都真正进入 FPK。
 VERIFY="$WORK/verify"
 mkdir -p "$VERIFY/root" "$VERIFY/app"
 tar -xzf "$FPK" -C "$VERIFY/root"
@@ -146,6 +154,9 @@ PACKED_VERMAGIC="$(modinfo -F vermagic "$PACKED_KO")"
 [ "$PACKED_VERMAGIC" = "$VERMAGIC" ] || fail "packed module vermagic changed"
 [ "$(modinfo -F version "$PACKED_KO")" = "$EXPECTED_DRIVER_VERSION" ] || fail "packed driver version mismatch"
 grep -Fq "insmodArgs.push('experimental_write=1')" "$VERIFY/app/driverload.js" || fail "packed loader patch missing"
+grep -Fq "const nvmeHwmons = listHwmon()" "$VERIFY/app/server.js" || fail "packed NVMe patch missing"
+grep -Fq "storage fan safety floor" "$VERIFY/app/server.js" || fail "packed storage floor missing"
+grep -Fq "const auto = f.autoSource || null" "$VERIFY/app/web/app.js" || fail "packed UI autoSource patch missing"
 
 # 源码归档包含已注入驱动的完整可维护工程，但不包含 .git 历史。
 tar -czf "$DIST/hwmonitor-fnos-${PACKAGE_VERSION}-source.tar.gz" -C "$HWMON" \
@@ -168,6 +179,8 @@ target_kernel=$TARGET_KERNEL
 compiler=$(gcc --version | head -1)
 module_vermagic=$VERMAGIC
 n5a_f8nab_experimental_write=1
+nvme_sysfs_bound=1
+storage_curve_min_pwm=77
 module_sha256=$KO_SHA
 fpk_sha256=$FPK_SHA
 source_sha256=$SOURCE_SHA
