@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
           bash scripts/build.sh
 
-      - name: Verify driver identity
+      - name: Verify N5A driver identity and loader gate
         shell: bash
         run: |
           set -euo pipefail
@@ -48,10 +48,13 @@ jobs:
             "$TARGET_KERNEL"*) ;;
             *) echo "vermagic mismatch" >&2; exit 1 ;;
           esac
-          if modinfo "$KO" | grep -q '^parm:.*experimental_write:'; then
-            echo "unexpected 0.2.x experimental_write gate detected" >&2
-            exit 1
-          fi
+          modinfo "$KO" | grep -q '^parm:.*experimental_write:'
+
+          SRC="dist/hwmonitor-fnos-${PACKAGE_VERSION}-source.tar.gz"
+          TMP="$(mktemp -d)"
+          tar -xzf "$SRC" -C "$TMP"
+          grep -Fq "insmodArgs.push('experimental_write=1')" "$TMP/driverload.js"
+          grep -Fq "/^(N5A|N5 AIR)$/i.test(product) && /^F8NAB$/i.test(board)" "$TMP/driverload.js"
 
       - name: Upload build outputs
         uses: actions/upload-artifact@v4
