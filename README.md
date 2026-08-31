@@ -12,6 +12,8 @@ Minisforum N5 系列在 fnOS 上使用 `ltdstudio/hwmonitor` 的内核适配构�
 - hwmonitor upstream：`v1.5.1`
 - N5 driver upstream：`0.2.0`
 - patched package：`1.5.6`
+- 发布说明：[`releases/v1.5.6.md`](releases/v1.5.6.md)
+- 变更日志：[`CHANGELOG.md`](CHANGELOG.md)
 
 ## 为什么必须使用 0.2.0
 
