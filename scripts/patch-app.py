@@ -77,7 +77,7 @@ s = s.replace(old_nvme, new_nvme, 1)
 old_target = """    const target = curvePwm(cur.points, src);
 """
 new_target = """    let target = curvePwm(cur.points, src);
-    // Storage fan safety floor: a bad/low SSD/HDD temperature source must not
+    // storage fan safety floor: a bad/low SSD/HDD temperature source must not
     // stop the storage cooling path. 77/255 ~= 30%.
     if (['ssd', 'hdd'].includes(normRole(fan.role))) target = Math.max(target, 77);
 """
