@@ -23,6 +23,7 @@ log "package version:    $PACKAGE_VERSION"
 command -v git >/dev/null || fail "git not found"
 command -v make >/dev/null || fail "make not found"
 command -v modinfo >/dev/null || fail "modinfo not found"
+command -v python3 >/dev/null || fail "python3 not found"
 
 HWMON="$WORK/hwmonitor"
 DRV="$WORK/minisforum-n5-it5571"
@@ -57,17 +58,42 @@ make -j2 -C "$KDIR" M="$DRV/driver-prototype" modules
 KO_SRC="$DRV/driver-prototype/minisforum_n5_it5571.ko"
 [ -f "$KO_SRC" ] || fail "kernel module was not produced"
 VERMAGIC="$(modinfo -F vermagic "$KO_SRC")"
+DRV_VERSION="$(modinfo -F version "$KO_SRC")"
+DRV_SRCVERSION="$(modinfo -F srcversion "$KO_SRC")"
 case "$VERMAGIC" in
   "$TARGET_KERNEL"*) ;;
   *) fail "vermagic mismatch: $VERMAGIC" ;;
 esac
+[ "$DRV_VERSION" = "$EXPECTED_DRIVER_VERSION" ] || fail "driver version mismatch: $DRV_VERSION"
+[ "$DRV_SRCVERSION" = "$EXPECTED_DRIVER_SRCVERSION" ] || fail "driver srcversion mismatch: $DRV_SRCVERSION"
+modinfo "$KO_SRC" | grep -q '^parm:.*experimental_write:' || fail "experimental_write module parameter missing"
 
 KO_NAME="minisforum_n5_it5571-${TARGET_KERNEL}.ko"
 mkdir -p "$HWMON/app/drivers/n5"
 cp "$KO_SRC" "$HWMON/app/drivers/n5/$KO_NAME"
 cp "$KO_SRC" "$DIST/$KO_NAME"
 
-# 保留上游业务代码，仅调整本地包版本。驱动加载逻辑本身已经按 uname -r 精确匹配。
+# 上游 0.2.0 将 N5A/F8NAB 标记为实验机型，默认只读。
+# 用户已在该机型实机确认温度/RPM 数据合理，因此只对精确 DMI=N5A|N5 AIR + F8NAB
+# 使用驱动官方预留的 experimental_write=1 参数；不修改驱动源码中的安全门禁。
+DRIVERLOAD="$HWMON/app/driverload.js"
+python3 - "$DRIVERLOAD" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text(encoding='utf-8')
+old = """  try {\n    execFileSync(insmod, [match.file], { timeout: 20000, stdio: 'pipe' });\n    if (log) log(`N5 driver loaded: ${path.basename(match.file)}`);\n"""
+new = """  const product = (dmi && dmi.product_name) || '';\n  const n5AirF8nab = /^(N5A|N5 AIR)$/i.test(product) && /^F8NAB$/i.test(board);\n  const insmodArgs = [match.file];\n  if (n5AirF8nab) {\n    insmodArgs.push('experimental_write=1');\n    if (log) log('N5A/F8NAB: enabling upstream experimental_write=1');\n  }\n\n  try {\n    execFileSync(insmod, insmodArgs, { timeout: 20000, stdio: 'pipe' });\n    if (log) log(`N5 driver loaded: ${path.basename(match.file)}`);\n"""
+if old not in s:
+    raise SystemExit('driverload patch anchor not found')
+p.write_text(s.replace(old, new, 1), encoding='utf-8')
+PY
+
+grep -Fq "insmodArgs.push('experimental_write=1')" "$DRIVERLOAD" || fail "N5A write-enable loader patch missing"
+grep -Fq "/^(N5A|N5 AIR)$/i.test(product) && /^F8NAB$/i.test(board)" "$DRIVERLOAD" || fail "N5A/F8NAB DMI gate missing"
+
+# 保留 hwmonitor 业务代码，仅调整本地包版本。
 sed -i -E "s/^version[[:space:]]*=.*/version         = ${PACKAGE_VERSION}/" "$HWMON/manifest"
 python3 - "$HWMON/app/package.json" "$PACKAGE_VERSION" <<'PY'
 import json, sys
@@ -82,16 +108,20 @@ PY
 sed -i -E "s/^VER=.*/VER=${PACKAGE_VERSION}/" "$HWMON/build.sh"
 
 cat > "$HWMON/PATCH_INFO.md" <<EOF
-# fnOS c1032 local patch
+# fnOS c1032 / Minisforum N5A F8NAB local patch
 
 - hwmonitor upstream: ${HWMONITOR_REF} (${HWMONITOR_TAG})
 - N5 driver upstream: ${N5_DRIVER_REF}
 - driver source blob: ${N5_DRIVER_SOURCE_SHA1}
+- driver version: ${DRV_VERSION}
+- driver srcversion: ${DRV_SRCVERSION}
 - target kernel: ${TARGET_KERNEL}
 - module vermagic: ${VERMAGIC}
 - package version: ${PACKAGE_VERSION}
+- N5A/F8NAB: load upstream 0.2.0 with experimental_write=1
 
-Only the target-kernel N5 module and package version metadata are added/changed.
+The kernel driver source is unmodified. The application loader passes the upstream
+experimental_write=1 module parameter only when DMI is exactly N5A/N5 AIR + F8NAB.
 EOF
 
 log "building FPK"
@@ -104,7 +134,7 @@ FPK="$HWMON/hwmonitor_${PACKAGE_VERSION}_x86.fpk"
 [ -f "$FPK" ] || fail "FPK not produced"
 cp "$FPK" "$DIST/"
 
-# 反向解包成品，再次确认目标 ko 真正进入 FPK，避免只验证工作目录。
+# 反向解包成品，确认目标 ko 和 N5A 参数加载逻辑都真正进入 FPK。
 VERIFY="$WORK/verify"
 mkdir -p "$VERIFY/root" "$VERIFY/app"
 tar -xzf "$FPK" -C "$VERIFY/root"
@@ -114,6 +144,8 @@ PACKED_KO="$VERIFY/app/drivers/n5/$KO_NAME"
 [ -f "$PACKED_KO" ] || fail "target module missing from packed FPK"
 PACKED_VERMAGIC="$(modinfo -F vermagic "$PACKED_KO")"
 [ "$PACKED_VERMAGIC" = "$VERMAGIC" ] || fail "packed module vermagic changed"
+[ "$(modinfo -F version "$PACKED_KO")" = "$EXPECTED_DRIVER_VERSION" ] || fail "packed driver version mismatch"
+grep -Fq "insmodArgs.push('experimental_write=1')" "$VERIFY/app/driverload.js" || fail "packed loader patch missing"
 
 # 源码归档包含已注入驱动的完整可维护工程，但不包含 .git 历史。
 tar -czf "$DIST/hwmonitor-fnos-${PACKAGE_VERSION}-source.tar.gz" -C "$HWMON" \
@@ -130,9 +162,12 @@ hwmonitor_ref=$HWMONITOR_REF
 hwmonitor_tag=$HWMONITOR_TAG
 driver_ref=$N5_DRIVER_REF
 driver_source_blob=$N5_DRIVER_SOURCE_SHA1
+driver_version=$DRV_VERSION
+driver_srcversion=$DRV_SRCVERSION
 target_kernel=$TARGET_KERNEL
 compiler=$(gcc --version | head -1)
 module_vermagic=$VERMAGIC
+n5a_f8nab_experimental_write=1
 module_sha256=$KO_SHA
 fpk_sha256=$FPK_SHA
 source_sha256=$SOURCE_SHA
