@@ -35,6 +35,24 @@ jobs:
           set -euo pipefail
           bash scripts/build.sh
 
+      - name: Verify driver identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./upstream.lock
+          KO="dist/minisforum_n5_it5571-${TARGET_KERNEL}.ko"
+          test -f "$KO"
+          test "$(modinfo -F version "$KO")" = "$EXPECTED_DRIVER_VERSION"
+          test "$(modinfo -F srcversion "$KO")" = "$EXPECTED_DRIVER_SRCVERSION"
+          case "$(modinfo -F vermagic "$KO")" in
+            "$TARGET_KERNEL"*) ;;
+            *) echo "vermagic mismatch" >&2; exit 1 ;;
+          esac
+          if modinfo "$KO" | grep -q '^parm:.*experimental_write:'; then
+            echo "unexpected 0.2.x experimental_write gate detected" >&2
+            exit 1
+          fi
+
       - name: Upload build outputs
         uses: actions/upload-artifact@v4
         with:
