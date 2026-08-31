@@ -40,9 +40,4 @@ jobs:
         with:
           name: hwmonitor-fnos-c1032
           if-no-files-found: error
-          path: |
-            dist/hwmonitor_1.5.2_x86.fpk
-            dist/minisforum_n5_it5571-6.18.18.c1032-trim.ko
-            dist/hwmonitor-fnos-1.5.2-source.tar.gz
-            dist/SHA256SUMS
-            dist/build-info.txt
+          path: dist/
