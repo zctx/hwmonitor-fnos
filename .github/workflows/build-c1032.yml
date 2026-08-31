@@ -53,8 +53,8 @@ jobs:
           SRC="dist/hwmonitor-fnos-${PACKAGE_VERSION}-source.tar.gz"
           TMP="$(mktemp -d)"
           tar -xzf "$SRC" -C "$TMP"
-          grep -Fq "insmodArgs.push('experimental_write=1')" "$TMP/driverload.js"
-          grep -Fq "/^(N5A|N5 AIR)$/i.test(product) && /^F8NAB$/i.test(board)" "$TMP/driverload.js"
+          grep -Fq "insmodArgs.push('experimental_write=1')" "$TMP/app/driverload.js"
+          grep -Fq "/^(N5A|N5 AIR)$/i.test(product) && /^F8NAB$/i.test(board)" "$TMP/app/driverload.js"
 
       - name: Upload build outputs
         uses: actions/upload-artifact@v4
