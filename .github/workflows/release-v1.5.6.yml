@@ -1,0 +1,77 @@
+name: Publish v1.5.6
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v1.5.6.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download verified 1.5.6 build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download 33413254577 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hwmonitor-fnos-c1032 \
+            --dir dist
+          ls -lah dist
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/hwmonitor_1.5.6_x86.fpk
+          test -f dist/minisforum_n5_it5571-6.18.18.c1032-trim.ko
+          test -f dist/hwmonitor-fnos-1.5.6-source.tar.gz
+          test -f dist/SHA256SUMS
+          test -f dist/build-info.txt
+          grep -Fxq 'package_version=1.5.6' dist/build-info.txt
+          grep -Fxq 'fpk_sha256=73a7a0029efe9387b55c3e881a438781c0d8f4b624a87d8156c6075ac45c570c' dist/build-info.txt
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG='v1.5.6'
+          TITLE='hwmonitor-fnos v1.5.6'
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TITLE" \
+              --notes-file releases/v1.5.6.md
+            gh release upload "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes-file releases/v1.5.6.md
+          fi
+
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view v1.5.6 --repo "$GITHUB_REPOSITORY" --json tagName,name,isDraft,isPrerelease,url,assets
