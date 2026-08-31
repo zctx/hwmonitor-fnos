@@ -2,10 +2,13 @@ HWMONITOR_REPO=https://github.com/ltdstudio/hwmonitor.git
 HWMONITOR_REF=506ab0d316a2932e071f8102c2e7064b0b84feb5
 HWMONITOR_TAG=v1.5.1
 
+# 与官方 hwmonitor v1.5.1 FPK 中 c938 驱动保持同一代逻辑（0.1.0）。
+# 只针对新 fnOS 内核重编译，不引入 0.2.0 的“实验机型默认只读”行为变化。
 N5_DRIVER_REPO=https://github.com/ltdstudio/minisforum-n5-it5571.git
-N5_DRIVER_REF=e47545166ac93e3c5769dcaef75ee6ec4dd5d95d
-N5_DRIVER_SOURCE_SHA1=28484eba79bac7b5e65efa85cc48f27a87d5637e
+N5_DRIVER_REF=6926fe9d08be6766a5d4f5da34edf3bc7f267527
+N5_DRIVER_SOURCE_SHA1=a3f7b6dac7e37320c420b2e58b47c54751c46ab4
+EXPECTED_DRIVER_VERSION=0.1.0
 
 TARGET_KERNEL=6.18.18.c1032-trim
 BUILD_IMAGE=makedie/fnos:kernHead-6.18.18.c1032-trim-amd64
-PACKAGE_VERSION=1.5.2
+PACKAGE_VERSION=1.5.3
