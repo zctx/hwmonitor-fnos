@@ -1,0 +1,58 @@
+name: Promote v1.5.10 stable
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/promote-v1.5.10-stable.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: promote-v1.5.10-stable
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify existing prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view v1.5.10 --repo "$GITHUB_REPOSITORY"             --json tagName,isDraft,isPrerelease,url,assets > /tmp/release.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/release.json'))
+          assert d['tagName']=='v1.5.10'
+          assert d['isDraft'] is False
+          names={a['name'] for a in d['assets']}
+          required={'hwmonitor_1.5.10_x86.fpk','SHA256SUMS','build-info.txt','hwmonitor-fnos-1.5.10-source.tar.gz'}
+          assert required <= names, (required-names)
+          PY
+          mkdir -p /tmp/v1510
+          gh release download v1.5.10 --repo "$GITHUB_REPOSITORY"             -p hwmonitor_1.5.10_x86.fpk -D /tmp/v1510
+          printf '%s\n' 'a9905ef72370d552651ff8c41e4f0f2ffaa2bdd990357b194804c0d29ecb0f69  /tmp/v1510/hwmonitor_1.5.10_x86.fpk' | sha256sum -c -
+      - name: Promote to latest stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit v1.5.10 --repo "$GITHUB_REPOSITORY"             --title 'hwmonitor-fnos v1.5.10'             --notes-file releases/v1.5.10.md             --prerelease=false             --latest
+      - name: Verify stable state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view v1.5.10 --repo "$GITHUB_REPOSITORY"             --json tagName,name,isDraft,isPrerelease,url,assets > /tmp/stable.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/stable.json'))
+          assert d['tagName']=='v1.5.10'
+          assert d['name']=='hwmonitor-fnos v1.5.10'
+          assert d['isDraft'] is False
+          assert d['isPrerelease'] is False
+          print(d['url'])
+          PY
