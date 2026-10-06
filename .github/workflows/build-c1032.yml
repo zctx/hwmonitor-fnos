@@ -1,7 +1,7 @@
 name: Review and build fnOS FPK
 on:
   push:
-    branches: [main, feature/local-build-v1.5.9]
+    branches: [main, 'feature/**', 'fix/**']
     paths: ['upstream.lock', 'overlay/**', 'scripts/**', 'tests/**', 'validation/**', 'package.json', '.github/workflows/build-c1032.yml']
   pull_request:
   workflow_dispatch:
