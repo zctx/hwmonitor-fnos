@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends git ca-certificates make gcc binutils kmod python3 tar gzip xz-utils curl perl coreutils
+          apt-get install -y --no-install-recommends git ca-certificates make gcc binutils kmod python3 tar gzip xz-utils curl perl coreutils nodejs
 
       - name: Prepare exact fnOS kernel headers
         shell: bash
@@ -63,6 +63,11 @@ jobs:
           grep -Fxq "package_version=${PACKAGE_VERSION}" dist/build-info.txt
           grep -Fxq 'remote_driver_channel=kernel-modules' dist/build-info.txt
           (cd dist && sha256sum -c SHA256SUMS)
+          TMP=$(mktemp -d)
+          tar -xzf "dist/hwmonitor-fnos-${PACKAGE_VERSION}-source.tar.gz" -C "$TMP"
+          node --check "$TMP/app/driverload.js"
+          node --check "$TMP/app/server.js"
+          node --check "$TMP/app/web/app.js"
 
       - name: Upload build outputs
         uses: actions/upload-artifact@v4
