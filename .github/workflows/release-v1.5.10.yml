@@ -1,0 +1,76 @@
+name: Verify and publish fnOS-permission fix v1.5.10
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/release-v1.5.10.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish-v1.5.10
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: addb0901fb835b62cc34ba9e6292cfcafdd52a0c
+          persist-credentials: false
+      - name: Download exact tested main build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/37495353539" > run.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('run.json'))
+          assert d['head_sha']=='addb0901fb835b62cc34ba9e6292cfcafdd52a0c'
+          assert d['event']=='push' and d['status']=='completed' and d['conclusion']=='success'
+          PY
+          gh run download 37495353539 --repo "$GITHUB_REPOSITORY" --name hwmonitor-fnos-current --dir dist
+          grep -Fx 'adapter_commit=addb0901fb835b62cc34ba9e6292cfcafdd52a0c' dist/build-info.txt
+          grep -Fx 'package_version=1.5.10' dist/build-info.txt
+          printf '%s\n' 'a9905ef72370d552651ff8c41e4f0f2ffaa2bdd990357b194804c0d29ecb0f69  dist/hwmonitor_1.5.10_x86.fpk' | sha256sum -c -
+          (cd dist; sha256sum -c SHA256SUMS)
+      - name: Reverify final FPK
+        run: |
+          set -euo pipefail
+          if ! command -v modinfo >/dev/null; then sudo apt-get update; sudo apt-get install -y kmod; fi
+          python3 scripts/verify-package.py dist/hwmonitor_1.5.10_x86.fpk
+          mkdir verify-root verify-app
+          tar -xzf dist/hwmonitor_1.5.10_x86.fpk -C verify-root app.tgz
+          tar -xzf verify-root/app.tgz -C verify-app
+          grep -Fq 'function packagedSource' verify-app/n5-local-build.js
+          grep -Fq 'fnOS 会给 /volX/@appcenter/<app> 添加 group-write/ACL' verify-app/n5-local-build.js
+          node --check verify-app/n5-local-build.js
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: addb0901fb835b62cc34ba9e6292cfcafdd52a0c
+          persist-credentials: false
+      - name: Publish tested assets without replacing older releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download 37495353539 --repo "$GITHUB_REPOSITORY" --name hwmonitor-fnos-current --dir dist
+          printf '%s\n' 'a9905ef72370d552651ff8c41e4f0f2ffaa2bdd990357b194804c0d29ecb0f69  dist/hwmonitor_1.5.10_x86.fpk' | sha256sum -c -
+          (cd dist; sha256sum -c SHA256SUMS)
+          gh release create v1.5.10 dist/* --repo "$GITHUB_REPOSITORY" \
+            --target addb0901fb835b62cc34ba9e6292cfcafdd52a0c \
+            --title 'hwmonitor-fnos v1.5.10 — fnOS local-build permission fix, awaiting NAS validation' \
+            --notes-file releases/v1.5.10.md --prerelease --latest=false
+          gh release view v1.5.10 --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,url,assets
