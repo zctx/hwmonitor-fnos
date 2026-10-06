@@ -3,7 +3,7 @@ set -euo pipefail
 
 KERNEL="${1:?usage: prepare-fnos-headers.sh <kernel-release>}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-META_URL="https://raw.githubusercontent.com/GreenDamTan/DockerFile/dev/fnOS/buildKernelModulesEnv/${KERNEL}_amd64.dockerfile"
+META_URL="https://api.github.com/repos/GreenDamTan/DockerFile/contents/fnOS/buildKernelModulesEnv/${KERNEL}_amd64.dockerfile?ref=dev"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -13,7 +13,21 @@ if [ -e "/lib/modules/$KERNEL/build/Makefile" ] || [ -e "/usr/src/linux-headers-
 fi
 
 echo "[headers] metadata: $META_URL"
-curl -fsSL "$META_URL" -o "$TMP/kernel.dockerfile"
+curl -fL --retry 3 --connect-timeout 15 \
+  -H 'Accept: application/vnd.github+json' \
+  -H 'User-Agent: hwmonitor-fnos' \
+  "$META_URL" -o "$TMP/meta.json"
+python3 - "$TMP/meta.json" "$TMP/kernel.dockerfile" <<'PY'
+import base64, json, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, 'r', encoding='utf-8') as f:
+    obj = json.load(f)
+content = obj.get('content')
+if not content:
+    raise SystemExit('GitHub contents response has no content')
+with open(dst, 'wb') as f:
+    f.write(base64.b64decode(content))
+PY
 
 get_env() {
   local name="$1"
