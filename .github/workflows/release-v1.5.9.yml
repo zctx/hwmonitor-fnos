@@ -1,0 +1,81 @@
+name: Verify and publish local-build v1.5.9
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/release-v1.5.9.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish-v1.5.9
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ce867f5041622b2e6aac348496ba829e502a6774
+          persist-credentials: false
+      - name: Download immutable tested build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/37489291006" > run.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('run.json'))
+          assert d['head_sha']=='ce867f5041622b2e6aac348496ba829e502a6774'
+          assert d['event']=='push' and d['status']=='completed' and d['conclusion']=='success'
+          PY
+          gh run download 37489291006 --repo "$GITHUB_REPOSITORY" --name hwmonitor-fnos-current --dir dist
+          grep -Fx 'adapter_commit=ce867f5041622b2e6aac348496ba829e502a6774' dist/build-info.txt
+          grep -Fx 'package_version=1.5.9' dist/build-info.txt
+          printf '%s\n' '3388fb14d24002566fea6e4c012b512382dcdefcf4c10092efe8151ca2da2a20  dist/hwmonitor_1.5.9_x86.fpk' | sha256sum -c -
+          (cd dist; sha256sum -c SHA256SUMS)
+      - name: Verify actual FPK and live remote fallback without real insmod
+        run: |
+          set -euo pipefail
+          if ! command -v modinfo >/dev/null; then sudo apt-get update; sudo apt-get install -y kmod; fi
+          python3 scripts/verify-package.py dist/hwmonitor_1.5.9_x86.fpk
+          mkdir verify-root verify-app
+          tar -xzf dist/hwmonitor_1.5.9_x86.fpk -C verify-root app.tgz
+          tar -xzf verify-root/app.tgz -C verify-app
+          # 本机真实 Kbuild 已由固定 build run 验证；此处独立覆盖真实远程回退与离线缓存。
+          sudo env HWMON_N5_LOCAL_BUILD=0 node validation/channel-live.cjs "$PWD/verify-app" 2>&1 | tee live-channel-test.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v159-live-channel-test
+          path: live-channel-test.log
+          if-no-files-found: error
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ce867f5041622b2e6aac348496ba829e502a6774
+          persist-credentials: false
+      - name: Publish verified assets without replacing any existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download 37489291006 --repo "$GITHUB_REPOSITORY" --name hwmonitor-fnos-current --dir dist
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name v159-live-channel-test --dir dist
+          printf '%s\n' '3388fb14d24002566fea6e4c012b512382dcdefcf4c10092efe8151ca2da2a20  dist/hwmonitor_1.5.9_x86.fpk' | sha256sum -c -
+          (cd dist; sha256sum -c SHA256SUMS)
+          gh release create v1.5.9 dist/* --repo "$GITHUB_REPOSITORY" \
+            --target ce867f5041622b2e6aac348496ba829e502a6774 \
+            --title 'hwmonitor-fnos v1.5.9 — local build, awaiting NAS validation' \
+            --notes-file releases/v1.5.9.md --prerelease --latest=false
+          gh release view v1.5.9 --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,url,assets
