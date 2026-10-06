@@ -34,7 +34,7 @@ case "$PKG" in
   *) echo "[headers] package/kernel mismatch: $PKG vs $KERNEL" >&2; exit 3 ;;
 esac
 
-SIGNED_URL="$("$ROOT/scripts/signforfn.sh" "$DLKEY" "$BASE_URL/$PKG")"
+SIGNED_URL="$(bash "$ROOT/scripts/signforfn.sh" "$DLKEY" "$BASE_URL/$PKG")"
 echo "[headers] downloading $PKG"
 curl -fL --retry 3 --connect-timeout 15 "$SIGNED_URL" -o "$TMP/$PKG"
 
