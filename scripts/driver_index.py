@@ -94,6 +94,25 @@ def write_json(file, value):
     Path(file).write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + '\n')
 
 
+def local_source_policy(app):
+    src = Path(app) / 'drivers' / 'n5-src'
+    cfg = lock()
+    files = {}
+    for name in ['Makefile', MODULE + '.c']:
+        file = src / name
+        if file.is_symlink() or not file.is_file():
+            raise ValueError('Local-build source must be a regular file: ' + name)
+        raw = file.read_bytes()
+        if not 0 < len(raw) <= 1024 * 1024:
+            raise ValueError('Local-build source size invalid')
+        if name.endswith('.c'):
+            blob = hashlib.sha1(f'blob {len(raw)}\0'.encode() + raw).hexdigest()
+            if blob != cfg['N5_DRIVER_SOURCE_SHA1']:
+                raise ValueError('Local-build driver source identity mismatch')
+        files[name] = hashlib.sha256(raw).hexdigest()
+    return dict(files=files)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['entry', 'policy', 'validate'])
@@ -113,7 +132,8 @@ def main():
         entries = {k: make_entry(bundle / f'{MODULE}-{k}.ko', k, cfg) for k in kernels}
         write_json(Path(args.path) / 'n5-driver-policy.json', dict(schema=2, module=MODULE,
             driver_version=cfg['EXPECTED_DRIVER_VERSION'], srcversion=cfg['EXPECTED_DRIVER_SRCVERSION'],
-            driver_ref=cfg['N5_DRIVER_REF'], channel=cfg['DRIVER_CHANNEL'], bundled=entries))
+            driver_ref=cfg['N5_DRIVER_REF'], channel=cfg['DRIVER_CHANNEL'], bundled=entries,
+            local_build=local_source_policy(args.path)))
 
 if __name__ == '__main__':
     main()

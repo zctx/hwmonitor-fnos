@@ -13,5 +13,5 @@ blob = hashlib.sha1(f'blob {len(raw)}\0'.encode() + raw).hexdigest()
 if blob != '9c7ee91d86084c832fd4c74a963d90c52c1f2c09':
     raise SystemExit('driverload.js upstream identity mismatch')
 overlay = Path(__file__).resolve().parent.parent / 'overlay'
-for name in ['driverload.js', 'n5-startup.js']:
+for name in ['driverload.js', 'n5-startup.js', 'n5-local-build.js']:
     shutil.copyfile(overlay / name, target.parent / name)

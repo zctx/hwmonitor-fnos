@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from driver_index import lock, make_entry
+from driver_index import lock, make_entry, local_source_policy
 
 cfg = lock()
 with tarfile.open(sys.argv[1]) as root:
@@ -28,9 +28,10 @@ with tempfile.TemporaryDirectory() as d:
     assert json.loads((dest/'package.json').read_text())['version'] == cfg['PACKAGE_VERSION']
     policy = json.loads((dest/'n5-driver-policy.json').read_text())
     assert set(policy['bundled']) == set(cfg['SUPPORTED_KERNELS'].split())
+    assert policy['local_build'] == local_source_policy(dest), 'Local source policy mismatch'
     for k, entry in policy['bundled'].items():
         assert make_entry(dest/'drivers/n5'/entry['asset'], k) == entry
-    for f in ['driverload.js','n5-startup.js','server.js','web/app.js']:
+    for f in ['driverload.js','n5-startup.js','n5-local-build.js','server.js','web/app.js']:
         subprocess.run(['node','--check',str(dest/f)],check=True,timeout=10)
     server = (dest/'server.js').read_text()
     for marker in ['const nvmeHwmons = listHwmon()', 'storage fan safety floor', "chip.name === 'spd5118'",
