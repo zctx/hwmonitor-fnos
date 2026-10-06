@@ -1,4 +1,4 @@
-name: Build c1032 FPK
+name: Build current fnOS FPK
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: makedie/fnos:kernHead-6.18.18.c1032-trim-amd64
+      image: makedie/fnos:kernHead-baseEnv-amd64
 
     steps:
       - name: Checkout adapter repo
@@ -27,7 +27,16 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends git ca-certificates make gcc binutils kmod python3 tar gzip xz-utils
+          apt-get install -y --no-install-recommends git ca-certificates make gcc binutils kmod python3 tar gzip xz-utils curl perl coreutils
+
+      - name: Prepare exact fnOS kernel headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./upstream.lock
+          for k in $SUPPORTED_KERNELS; do
+            bash scripts/prepare-fnos-headers.sh "$k"
+          done
 
       - name: Build patched FPK
         shell: bash
@@ -35,30 +44,29 @@ jobs:
           set -euo pipefail
           bash scripts/build.sh
 
-      - name: Verify N5A driver identity and loader gate
+      - name: Verify multi-kernel package
         shell: bash
         run: |
           set -euo pipefail
           source ./upstream.lock
-          KO="dist/minisforum_n5_it5571-${TARGET_KERNEL}.ko"
-          test -f "$KO"
-          test "$(modinfo -F version "$KO")" = "$EXPECTED_DRIVER_VERSION"
-          test "$(modinfo -F srcversion "$KO")" = "$EXPECTED_DRIVER_SRCVERSION"
-          case "$(modinfo -F vermagic "$KO")" in
-            "$TARGET_KERNEL"*) ;;
-            *) echo "vermagic mismatch" >&2; exit 1 ;;
-          esac
-          modinfo "$KO" | grep -q '^parm:.*experimental_write:'
-
-          SRC="dist/hwmonitor-fnos-${PACKAGE_VERSION}-source.tar.gz"
-          TMP="$(mktemp -d)"
-          tar -xzf "$SRC" -C "$TMP"
-          grep -Fq "insmodArgs.push('experimental_write=1')" "$TMP/app/driverload.js"
-          grep -Fq "/^(N5A|N5 AIR)$/i.test(product) && /^F8NAB$/i.test(board)" "$TMP/app/driverload.js"
+          for k in $SUPPORTED_KERNELS; do
+            KO="dist/minisforum_n5_it5571-${k}.ko"
+            test -f "$KO"
+            test "$(modinfo -F version "$KO")" = "$EXPECTED_DRIVER_VERSION"
+            test "$(modinfo -F srcversion "$KO")" = "$EXPECTED_DRIVER_SRCVERSION"
+            case "$(modinfo -F vermagic "$KO")" in
+              "$k"*) ;;
+              *) echo "vermagic mismatch for $k" >&2; exit 1 ;;
+            esac
+          done
+          test -f "dist/hwmonitor_${PACKAGE_VERSION}_x86.fpk"
+          grep -Fxq "package_version=${PACKAGE_VERSION}" dist/build-info.txt
+          grep -Fxq 'remote_driver_channel=kernel-modules' dist/build-info.txt
+          (cd dist && sha256sum -c SHA256SUMS)
 
       - name: Upload build outputs
         uses: actions/upload-artifact@v4
         with:
-          name: hwmonitor-fnos-c1032
+          name: hwmonitor-fnos-${{ env.PACKAGE_VERSION || 'current' }}
           if-no-files-found: error
           path: dist/
