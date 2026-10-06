@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const https = require('https');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const { createLocalBuilder } = require('./n5-local-build');
 const runFile = promisify(execFile);
 const KMOD = 'minisforum_n5_it5571';
 const KERNEL_RE = /^6\.18\.18\.c[1-9][0-9]{0,8}-trim$/;
@@ -124,6 +125,10 @@ function createLoader(options = {}) {
   if (!/^[a-z0-9-]{1,64}$/.test(policy.channel || '')) throw new Error('无效驱动通道');
   const channel = 'https://github.com/zctx/hwmonitor-fnos/releases/download/' + policy.channel;
   const remote = options.remote === undefined ? process.env.HWMON_N5_REMOTE_DRIVER !== '0' : options.remote;
+  const localEnabled = options.local === undefined ? process.env.HWMON_N5_LOCAL_BUILD !== '0' : options.local;
+  let localAttempted = false;
+  let localState = { enabled: localEnabled, status: localEnabled ? 'not-needed' : 'disabled' };
+  const localDir = path.join(cache, 'local');
   const run = options.run || ((cmd, args, signal) => runFile(cmd, args,
     { encoding: 'utf8', timeout: 5000, maxBuffer: 256 * 1024, signal }));
   const download = options.download || fetchBytes;
@@ -142,10 +147,10 @@ function createLoader(options = {}) {
     throw new Error(name + ' 不可用');
   }
   function guard() { if (stopped) throw new Error('加载器已停止'); }
-  function privateCache() {
+  function privateCache(target = cache) {
     // 不从可由普通用户预先创建的 /tmp 路径取 root 内核代码。
-    let dir = path.parse(cache).root;
-    for (const part of cache.slice(dir.length).split(path.sep).filter(Boolean)) {
+    let dir = path.parse(target).root;
+    for (const part of target.slice(dir.length).split(path.sep).filter(Boolean)) {
       dir = path.join(dir, part);
       try { io.mkdirSync(dir, { mode: 0o700 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
       const st = io.lstatSync(dir);
@@ -153,7 +158,7 @@ function createLoader(options = {}) {
         throw new Error('驱动缓存父目录不可信: ' + dir);
       }
     }
-    io.chmodSync(cache, 0o700);
+    io.chmodSync(target, 0o700);
   }
   function secureRead(file, limit) {
     const fd = io.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -205,6 +210,55 @@ function createLoader(options = {}) {
     }
     return '模块存在但没有完整的 N5 hwmon/PWM 节点';
   }
+  async function localCandidate(log) {
+    if (!localEnabled || !policy.local_build) return null;
+    privateCache(localDir);
+    const receipt = path.join(localDir, kernel + '.json');
+    const file = path.join(localDir, `${KMOD}-${kernel}.ko`);
+    try {
+      const saved = JSON.parse(secureRead(receipt, MAX_INDEX).toString('utf8'));
+      if (saved.origin !== 'local' || !saved.source_hashes ||
+          !Object.entries(policy.local_build.files).every(([k, v]) => saved.source_hashes[k] === v)) {
+        throw new Error('本机缓存源码策略不匹配');
+      }
+      await verify(file, saved.entry);
+      localState = { enabled: true, status: 'cached' };
+      return { file, source: 'local-cache' };
+    } catch (e) {
+      if (e.code !== 'ENOENT' && log) log('N5 本机缓存未通过校验: ' + e.message);
+    }
+    // 每次服务生命周期最多尝试一次，避免缺工具/编译失败时每五分钟重复 make。
+    if (localAttempted) return null;
+    localAttempted = true;
+    let tmp, meta;
+    try {
+      const builder = options.localBuilder || createLocalBuilder({ appDir: base, cacheDir: localDir,
+        kernel, policy, fs: io, owner });
+      localState = { enabled: true, status: 'building' };
+      const built = await builder.build(signal.signal, log);
+      guard();
+      const entry = { kernel, asset: `${KMOD}-${kernel}.ko`, size: built.bytes.length,
+        sha256: crypto.createHash('sha256').update(built.bytes).digest('hex'),
+        driver_version: policy.driver_version, srcversion: policy.srcversion, driver_ref: policy.driver_ref };
+      // 本机编译时先计算新产物摘要，再以真实 modinfo 校验身份；摘要用于后续缓存完整性检查。
+      tmp = path.join(localDir, '.pending-' + crypto.randomBytes(12).toString('hex') + '.ko');
+      writeNew(tmp, built.bytes);
+      await verify(tmp, entry);
+      guard();
+      io.renameSync(tmp, file); tmp = null;
+      meta = path.join(localDir, '.pending-' + crypto.randomBytes(12).toString('hex') + '.json');
+      writeNew(meta, JSON.stringify({ origin: 'local', source_hashes: policy.local_build.files, entry,
+        headers: built.headers, compiler: built.compiler, symvers_sha256: built.symvers_sha256 }));
+      io.renameSync(meta, receipt); meta = null;
+      localState = { enabled: true, status: 'compiled', headers: built.headers, compiler: built.compiler };
+      if (log) log('N5 本机编译产物身份校验通过，已缓存: ' + kernel);
+      return { file, source: 'local-build' };
+    } catch (e) {
+      localState = { enabled: true, status: 'failed', error: e.message };
+      if (!stopped && log) log('N5 本机编译不可用，' + (remote ? '回退远程通道: ' : '远程通道已禁用: ') + e.message);
+      return null;
+    } finally { remove(tmp); remove(meta); }
+  }
   async function candidate(log) {
     const entry = policy.bundled[kernel];
     if (entry) {
@@ -213,6 +267,9 @@ function createLoader(options = {}) {
       await verify(file, entry);
       return { file, source: 'bundled' };
     }
+    const local = await localCandidate(log);
+    guard();
+    if (local) return local;
     if (!remote) return null; // 禁用远程时连旧的远程缓存也不加载。
     privateCache();
     const receipt = path.join(cache, kernel + '.json');
@@ -290,7 +347,7 @@ function createLoader(options = {}) {
   }
   function autoload(dmi, log) {
     if (stopped) return Promise.resolve({ status: 'failed', retryable: false, error: '加载器已停止' });
-    if (!pending) pending = load(dmi, log).finally(() => { pending = null; });
+    if (!pending) pending = load(dmi, log).then(state => ({ ...state, local_build: localState })).finally(() => { pending = null; });
     return pending;
   }
   function cancel() { stopped = true; signal.abort(); }
