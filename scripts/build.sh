@@ -3,6 +3,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 source ./upstream.lock
+ADAPTER_SHA="$(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse HEAD 2>/dev/null || cat "$ROOT/SOURCE_COMMIT")"
+[[ "$ADAPTER_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "invalid adapter commit" >&2; exit 2; }
 WORK="$ROOT/.work"
 DIST="$ROOT/dist"
 rm -rf "$WORK" "$DIST"
@@ -47,12 +49,13 @@ cp "$FPK" "$DIST/"
 mkdir -p "$HWMON/adapter"
 cp -a scripts overlay tests docs .github upstream.lock package.json "$HWMON/adapter/"
 cp README.md "$HWMON/README-adapter.md"
+printf '%s\n' "$ADAPTER_SHA" > "$HWMON/adapter/SOURCE_COMMIT"
 cp -a .headers-info "$HWMON/adapter/headers-info"
 find "$HWMON/adapter" -type d -name __pycache__ -prune -exec rm -rf {} +
 tar -czf "$DIST/hwmonitor-fnos-${PACKAGE_VERSION}-source.tar.gz" -C "$HWMON" \
   --exclude=.git --exclude="hwmonitor_${PACKAGE_VERSION}_x86.fpk" .
 {
-  echo "adapter_commit=$(git rev-parse HEAD)"
+  echo "adapter_commit=$ADAPTER_SHA"
   echo "package_version=$PACKAGE_VERSION"
   echo "target_kernel=$TARGET_KERNEL"
   echo "supported_kernels=$SUPPORTED_KERNELS"

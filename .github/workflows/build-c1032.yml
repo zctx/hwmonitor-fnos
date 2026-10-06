@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/build.sh | tee build-test.log
+          bash scripts/build.sh 2>&1 | tee build-test.log
           cp build-test.log dist/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
