@@ -33,54 +33,32 @@ python3 - "$TMP/kernel.dockerfile" "$TMP/vars.sh" <<'PY'
 import re, shlex, sys
 src, out = sys.argv[1], sys.argv[2]
 text = open(src, encoding='utf-8').read()
+
 def env(name):
-    m = re.search(r'^ENV\\s+' + re.escape(name) + r'=["\\\']?([^"\\\'\\n]+)["\\\']?\\s*
-case "$PKG" in
-  *"$KERNEL"*"_amd64.deb") ;;
-  *) echo "[headers] package/kernel mismatch: $PKG vs $KERNEL" >&2; exit 3 ;;
-esac
+    prefix = 'ENV ' + name + '='
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(prefix):
+            return line[len(prefix):].strip().strip('"').strip("'")
+    raise SystemExit('missing ENV ' + name)
 
-SIGNED_URL="$(bash "$ROOT/scripts/signforfn.sh" "$DLKEY" "$BASE_URL/$PKG")"
-echo "[headers] downloading $PKG"
-curl -fL --retry 3 --connect-timeout 15 "$SIGNED_URL" -o "$TMP/$PKG"
+expected_sha = ''
+for line in text.splitlines():
+    if '"sign"' in line:
+        m = re.search(r'([0-9a-f]{64})', line)
+        if m:
+            expected_sha = m.group(1)
+            break
 
-if [ -n "$EXPECTED_SHA" ]; then
-  ACTUAL_SHA="$(sha256sum "$TMP/$PKG" | awk '{print $1}')"
-  [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] || {
-    echo "[headers] SHA256 mismatch: $ACTUAL_SHA != $EXPECTED_SHA" >&2
-    exit 4
-  }
-fi
-
-dpkg -i "$TMP/$PKG"
-
-KDIR="/usr/src/linux-headers-$KERNEL"
-[ -d "$KDIR" ] || KDIR="/lib/modules/$KERNEL/build"
-[ -f "$KDIR/Makefile" ] || { echo "[headers] build tree missing for $KERNEL" >&2; exit 5; }
-
-if [ -f "$KDIR/include/config/kernel.release" ]; then
-  ACTUAL="$(cat "$KDIR/include/config/kernel.release")"
-  [ "$ACTUAL" = "$KERNEL" ] || {
-    echo "[headers] kernel.release mismatch: $ACTUAL != $KERNEL" >&2
-    exit 6
-  }
-fi
-
-echo "[headers] ready: $KERNEL -> $KDIR"
-, text, re.M)
-    if not m:
-        raise SystemExit(f'missing ENV {name}')
-    return m.group(1)
-m = re.search(r'^\\s*#\\s*"sign"\\s*:\\s*"([0-9a-f]{64})"', text, re.M)
 vals = {
     'BASE_URL': env('BaseURL'),
     'PKG': env('PKG'),
     'DLKEY': env('dlkey'),
-    'EXPECTED_SHA': m.group(1) if m else '',
+    'EXPECTED_SHA': expected_sha,
 }
 with open(out, 'w', encoding='utf-8') as f:
     for k, v in vals.items():
-        f.write(f"{k}={shlex.quote(v)}\\n")
+        f.write(f"{k}={shlex.quote(v)}\n")
 PY
 # shellcheck disable=SC1090
 source "$TMP/vars.sh"
