@@ -3,17 +3,16 @@ set -euo pipefail
 
 KERNEL="${1:?usage: prepare-fnos-headers.sh <kernel-release>}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-META_URL="https://api.github.com/repos/GreenDamTan/DockerFile/contents/fnOS/buildKernelModulesEnv/${KERNEL}_amd64.dockerfile?ref=dev"
+source "$ROOT/upstream.lock"
+META_REF="${2:-$HEADER_METADATA_REF}"
+[[ "$KERNEL" =~ ^6\.18\.18\.c[1-9][0-9]{0,8}-trim$ ]] || { echo "invalid kernel" >&2; exit 2; }
+[[ "$META_REF" =~ ^[a-f0-9]{40}$ ]] || { echo "metadata ref must be a commit SHA" >&2; exit 2; }
+META_URL="https://api.github.com/repos/GreenDamTan/DockerFile/contents/fnOS/buildKernelModulesEnv/${KERNEL}_amd64.dockerfile?ref=${META_REF}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-if [ -e "/lib/modules/$KERNEL/build/Makefile" ] || [ -e "/usr/src/linux-headers-$KERNEL/Makefile" ]; then
-  echo "[headers] already installed: $KERNEL"
-  exit 0
-fi
-
 echo "[headers] metadata: $META_URL"
-curl -fL --retry 3 --connect-timeout 15 \
+curl --proto '=https' --proto-redir '=https' -fL --retry 3 --connect-timeout 15 --max-time 120 --max-filesize 104857600 \
   -H 'Accept: application/vnd.github+json' \
   -H 'User-Agent: hwmonitor-fnos' \
   "$META_URL" -o "$TMP/meta.json"
@@ -29,37 +28,7 @@ with open(dst, 'wb') as f:
     f.write(base64.b64decode(content))
 PY
 
-python3 - "$TMP/kernel.dockerfile" "$TMP/vars.sh" <<'PY'
-import re, shlex, sys
-src, out = sys.argv[1], sys.argv[2]
-text = open(src, encoding='utf-8').read()
-
-def env(name):
-    prefix = 'ENV ' + name + '='
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith(prefix):
-            return line[len(prefix):].strip().strip('"').strip("'")
-    raise SystemExit('missing ENV ' + name)
-
-expected_sha = ''
-for line in text.splitlines():
-    if '"sign"' in line:
-        m = re.search(r'([0-9a-f]{64})', line)
-        if m:
-            expected_sha = m.group(1)
-            break
-
-vals = {
-    'BASE_URL': env('BaseURL'),
-    'PKG': env('PKG'),
-    'DLKEY': env('dlkey'),
-    'EXPECTED_SHA': expected_sha,
-}
-with open(out, 'w', encoding='utf-8') as f:
-    for k, v in vals.items():
-        f.write(f"{k}={shlex.quote(v)}\n")
-PY
+python3 "$ROOT/scripts/fnos_headers.py" "$TMP/kernel.dockerfile" "$KERNEL" "$TMP/vars.sh"
 # shellcheck disable=SC1090
 source "$TMP/vars.sh"
 echo "[headers] package: $PKG"
@@ -71,22 +40,28 @@ esac
 
 SIGNED_URL="$(bash "$ROOT/scripts/signforfn.sh" "$DLKEY" "$BASE_URL/$PKG")"
 echo "[headers] downloading $PKG"
-curl -fL --retry 3 --connect-timeout 15 "$SIGNED_URL" -o "$TMP/$PKG"
+curl --proto '=https' --proto-redir '=https' -fL --retry 3 --connect-timeout 15 --max-time 120 --max-filesize 104857600 "$SIGNED_URL" -o "$TMP/$PKG"
 
-if [ -n "$EXPECTED_SHA" ]; then
+if [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{64}$ ]]; then
   ACTUAL_SHA="$(sha256sum "$TMP/$PKG" | awk '{print $1}')"
   [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] || {
     echo "[headers] SHA256 mismatch: $ACTUAL_SHA != $EXPECTED_SHA" >&2
     exit 4
   }
+else
+  echo "required SHA256 missing" >&2; exit 4
 fi
 
+[ "$(dpkg-deb -f "$TMP/$PKG" Architecture)" = amd64 ]
+[ "$(dpkg-deb -f "$TMP/$PKG" Package)" = "linux-headers-$KERNEL" ]
 dpkg -i "$TMP/$PKG"
 
 KDIR="/usr/src/linux-headers-$KERNEL"
 [ -d "$KDIR" ] || KDIR="/lib/modules/$KERNEL/build"
 [ -f "$KDIR/Makefile" ] || { echo "[headers] build tree missing for $KERNEL" >&2; exit 5; }
 
+[ -s "$KDIR/Module.symvers" ] || { echo "Module.symvers missing" >&2; exit 6; }
+[ -f "$KDIR/include/config/kernel.release" ] || { echo "kernel.release missing" >&2; exit 6; }
 if [ -f "$KDIR/include/config/kernel.release" ]; then
   ACTUAL="$(cat "$KDIR/include/config/kernel.release")"
   [ "$ACTUAL" = "$KERNEL" ] || {
@@ -95,4 +70,6 @@ if [ -f "$KDIR/include/config/kernel.release" ]; then
   }
 fi
 
+mkdir -p "$ROOT/.headers-info"
+printf '%s\n' "kernel=$KERNEL" "metadata_ref=$META_REF" "package=$PKG" "sha256=$EXPECTED_SHA" > "$ROOT/.headers-info/$KERNEL.txt"
 echo "[headers] ready: $KERNEL -> $KDIR"
