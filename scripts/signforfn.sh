@@ -9,8 +9,10 @@ fi
 
 DLKEY="$1"
 URL="$2"
-PAD=$(( (4 - ${#DLKEY} % 4) % 4 ))
-DLKEY_PADDED="${DLKEY}$(printf '=%.0s' $(seq 1 "$PAD"))"
+DLKEY_PADDED="$DLKEY"
+while (( ${#DLKEY_PADDED} % 4 != 0 )); do
+  DLKEY_PADDED+="="
+done
 KEY=$(
   echo -n "$DLKEY_PADDED" |
   base64 -d 2>/dev/null |
