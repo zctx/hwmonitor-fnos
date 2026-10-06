@@ -1,0 +1,75 @@
+name: Publish v1.5.7
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v1.5.7.yml
+      - releases/v1.5.7.md
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download verified 1.5.7 build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download 37414650245 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hwmonitor-fnos-current \
+            --dir dist
+          ls -lah dist
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/hwmonitor_1.5.7_x86.fpk
+          test -f dist/minisforum_n5_it5571-6.18.18.c1032-trim.ko
+          test -f dist/minisforum_n5_it5571-6.18.18.c1126-trim.ko
+          test -f dist/hwmonitor-fnos-1.5.7-source.tar.gz
+          test -f dist/SHA256SUMS
+          test -f dist/build-info.txt
+          grep -Fxq 'package_version=1.5.7' dist/build-info.txt
+          grep -Fxq 'supported_kernels=6.18.18.c1032-trim 6.18.18.c1126-trim' dist/build-info.txt
+          grep -Fxq 'fpk_sha256=79acc3e12cb2c7b5c028a8883047c2b25ef3d3685e0067d1e473537e22033bc4' dist/build-info.txt
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG='v1.5.7'
+          TITLE='hwmonitor-fnos v1.5.7'
+          BUILD_SHA='ee93a732429d3cea4a02b58bf0c40c8ff426039e'
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$TITLE" --notes-file releases/v1.5.7.md
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+              --target "$BUILD_SHA" \
+              --title "$TITLE" \
+              --notes-file releases/v1.5.7.md
+          fi
+
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view v1.5.7 --repo "$GITHUB_REPOSITORY" --json tagName,name,isDraft,isPrerelease,url,assets
