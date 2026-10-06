@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.10 — 修复 fnOS 实机应用目录权限误判
+
+- 修复 1.5.9 本机编译在 fnOS `/volX/@appcenter/<app>` 的 group-write/ACL 安装权限下被提前拒绝。
+- 随包源码改为 appDir 固定边界 + 非 symlink + 实际字节 SHA256 校验，不再要求应用目录必须 0755/不可 group-write。
+- 宿主 kernel build tree、headers、GCC/ld、root 私有缓存的严格权限检查保持不变。
+- 新增 fnOS 0775/0664 应用树回归，源码篡改/symlink 拒绝测试继续保留。
+- N5 驱动源码、温度映射、风扇曲线、UI 和远程通道均不修改。
+- 触发问题的实机为 `6.18.18.c1107-trim`，具备完整 build tree、Module.symvers、GCC 12.2.0 和 kmod 30；1.5.9 在 make 前失败，因此本修正专门针对部署权限兼容性。
+
 ## 1.5.8 — 1.5.7 安全与可靠性复核
 
 - 修正首次远程下载 `.ko.tmp` 无法被 modinfo 识别。
