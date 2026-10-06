@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.5.7 - c1126 support and exact-kernel self-update channel
+
+### 新增
+
+- 新增 fnOS `6.18.18.c1126-trim` 的精确 N5A/F8NAB 驱动模块。
+- 1.5.7 同时内置 c1032 与 c1126 模块，运行时仍按 `uname -r` 精确选择。
+- 新增滚动 `kernel-modules` Release 通道。定时 CI 自动发现新的 `6.18.18.cNNNN-trim` 构建环境并编译对应模块。
+- 当未来内核没有内置模块时，应用可自动下载精确内核模块并缓存；驱动缺失时每 5 分钟重试。
+- 远程模块加载前强制验证 SHA256、`vermagic`、driver version=`0.2.0`、`srcversion=96E49785C432E4B85FAF416` 与 `experimental_write` 参数。
+- 可用 `HWMON_N5_REMOTE_DRIVER=0` 完全关闭远程驱动获取。
+
+### 安全策略
+
+- 不使用 `--force-vermagic`，不加载“相近版本”内核模块。
+- 自动通道仅接受 `6.18.18.cNNNN-trim`；大版本内核变化会失败关闭，需要人工确认兼容性。
+- N5A/F8NAB 仍仅在精确 DMI 匹配后传入上游 `experimental_write=1`。
+- 找不到正确模块时保持无自定义 PWM 驱动状态，由 BIOS/EC 默认控制风扇。
+
+### 保留
+
+- 1.5.6 的 NVMe 精确 sysfs 映射、最高温度控制源、SPD5118 唯一 ID / memory 分组、HDD cached/stale、真实 autoSource、SSD/HDD 77/255 安全下限均保留。
+
+### 构建验证
+
+- c1032 与 c1126 均使用对应 fnOS headers 编译。
+- CI 校验每个模块的 `vermagic`、version、srcversion 和模块参数。
+- 最终 FPK 反向解包后再次校验所有内置模块和应用补丁。
+- patched Node.js 文件执行语法检查。
+
 ## 1.5.6 - N5A/F8NAB c1032 stable handoff
 
 ### 适配范围
