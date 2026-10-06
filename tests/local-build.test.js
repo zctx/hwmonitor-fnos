@@ -64,6 +64,14 @@ test('source tampering is rejected before any tool is executed', async t => {
   const f=fixture(t); fs.appendFileSync(path.join(f.src,M+'.c'),'bad');
   await assert.rejects(f.build(),/SHA256/); assert.equal(f.state.calls.length,0);
 });
+test('fnOS group-writable app tree is accepted because packaged source bytes are hash-verified', async t => {
+  const f=fixture(t);
+  for (const p of [f.app, path.join(f.app,'drivers'), f.src]) fs.chmodSync(p,0o775);
+  for (const n of ['Makefile',M+'.c']) fs.chmodSync(path.join(f.src,n),0o664);
+  const r=await f.build();
+  assert.deepEqual(r.bytes,f.state.output);
+  assert.ok(f.state.calls.some(x=>path.basename(x.cmd)==='make'));
+});
 test('source symlink rejected',async t=>{
   const f=fixture(t);fs.unlinkSync(path.join(f.src,M+'.c'));fs.symlinkSync('/etc/passwd',path.join(f.src,M+'.c'));
   await assert.rejects(f.build(),/符号链接/);assert.equal(f.state.calls.length,0);

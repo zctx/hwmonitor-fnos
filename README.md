@@ -2,9 +2,9 @@
 
 Minisforum N5 系列在 fnOS 上使用 `ltdstudio/hwmonitor` 的社区适配构建仓库。不是飞牛或 Minisforum 官方软件。
 
-当前源码版本 **1.5.9**：在 1.5.8 已校验的驱动加载链上增加“本机已有精确 headers → 自动编译”。驱动 C 源码仍锁定上游 **0.2.0**；温度映射、风扇曲线和 UI 不变。
+当前源码版本 **1.5.10**：修复 1.5.9 在 fnOS 实机安装目录下因 group-write/ACL 被误判为“不可信源码路径”，导致本机编译在进入 make 前失败。驱动 C 源码仍锁定上游 **0.2.0**；温度映射、风扇曲线和 UI 不变。
 
-[1.5.9 说明](releases/v1.5.9.md) · [本机编译设计](docs/LOCAL-BUILD.md) · [1.5.7 审查](docs/REVIEW-1.5.7.md) · [历史变更](CHANGELOG.md)
+[1.5.10 说明](releases/v1.5.10.md) · [本机编译设计](docs/LOCAL-BUILD.md) · [1.5.7 审查](docs/REVIEW-1.5.7.md) · [历史变更](CHANGELOG.md)
 
 ## 适配范围
 
@@ -36,7 +36,7 @@ FPK 内置 `6.18.18.c1032-trim` 和 `6.18.18.c1126-trim` 的独立模块，按�
 
 保留 NVMe 精确 sysfs 映射、该盘最高传感器作为控制温度、SPD5118 内存分组、CPU/board 分类、HDD cached/stale、真实 autoSource 和 SSD/HDD 软件曲线 77/255 下限。该下限不保证任意风扇必定起转；N5A 写入仍属于上游 experimental profile。不要同时用多个程序控制相同风扇。
 
-本机编译信任 root 管理的宿主工具链和内核构建树，不是安全沙箱。源码按随包 SHA256 校验；本机新产物的 SHA256 在编译后计算并用于缓存完整性校验，不是独立签名。远程方案仍信任固定仓库的 HTTPS 发布权限。
+本机编译信任 root 管理的宿主工具链和内核构建树，不是安全沙箱。宿主 headers/GCC/ld/cache 仍要求 root 所有且不可被 group/other 写入。fnOS 的应用安装目录可能按平台规则带 group-write/ACL，因此随包驱动源码不再套用宿主目录权限规则，而是限定在 appDir 内、拒绝 symlink，并对实际读入字节执行随包 SHA256 校验。本机新产物的 SHA256 在编译后计算并用于缓存完整性校验，不是独立签名。远程方案仍信任固定仓库的 HTTPS 发布权限。
 
 ## 构建与验证
 

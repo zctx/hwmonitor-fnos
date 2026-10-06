@@ -1,4 +1,4 @@
-# 1.5.9 本机精确内核编译
+# 1.5.10 本机精确内核编译
 
 ## 目标和范围
 
@@ -12,7 +12,7 @@
 
 编译前寻找 `/lib/modules/<uname -r>/build`，仅该路径不存在时尝试 `/usr/src/linux-headers-<uname -r>`。若首选构建树存在但版本/权限有问题，不偷偷换另一棵树。要求 Makefile、非空 Module.symvers、kernel.release、auto.conf、autoconf.h、utsrelease.h 和 scripts/Makefile.build。release 与 UTS_RELEASE 必须一致，配置必须支持 x86_64/GCC/modules。优先选择现有 gcc-<major>，然后检查普通 gcc；数字版本必须与 CONFIG_GCC_VERSION 一致，不自动换装编译器。
 
-检查实际路径/关键文件的 root 所有权及不可由组/其他用户写入的权限；允许系统正常的 /lib 和 build 符号链接。源码和输出不允许符号链接。宿主 Kbuild 与工具链仍属于受信输入，不声称抵抗已被篡改的宿主系统。
+对**宿主**构建树、关键 headers、GCC/ld 和缓存目录检查 root 所有权及不可由组/其他用户写入的权限；允许系统正常的 /lib 和 build 符号链接。对**随 FPK 安装的驱动源码**使用不同信任规则：fnOS 会把 `/volX/@appcenter/<app>` 安装为带 group-write/ACL 的平台目录，因此不能把宿主 Kbuild 权限规则套到 appDir。随包源码必须位于 appDir 的固定子目录、不得是 symlink/越界路径，并对实际读入字节按 `n5-driver-policy.json` 中的 SHA256 校验后才复制到 root 私有工作目录。宿主 Kbuild 与工具链仍属于受信输入，不声称抵抗已被篡改的宿主系统。
 
 使用随机 root 私有工作目录，固定最小环境变量，调用 `make -j2 -C <exact-tree> M=<work> CC=<existing-gcc> HOSTCC=<existing-gcc> LD=<existing-ld> modules`。不经过 shell 拼接，不继承 MAKEFLAGS、CC、LD_PRELOAD 等用户环境。make 最多 120 秒，输出最多 256 KiB；超时/取消杀死整个进程组并清理工作目录。
 
@@ -35,3 +35,10 @@
 `validation/local-build.cjs` 在 CI 对真实 c1032/c1126 headers 执行生产编译器逻辑，使用真实 modinfo，检查事件循环持续运行、零网络和新加载器离线缓存复用。仅测试实例清空 bundled 列表以覆盖该路径，实际 FPK 内置策略不变。insmod 和硬件节点为测试桩；NAS 安装和物理风扇响应仍须实机验收。
 
 Linux Kbuild 参考：https://docs.kernel.org/kbuild/modules.html
+
+
+## 1.5.10 实机修正
+
+在 N5A / fnOS `6.18.18.c1107-trim` 实机上，1.5.9 已确认完整 headers、Module.symvers、GCC 12.2.0 和 kmod 均存在，但 fnOS 将应用目录安装为 `root:root` 且带 group-write/ACL（例如 `rwxrwxr-x+`）。1.5.9 的 `trusted()` 把该平台权限当作宿主 Kbuild 风险，在进入 make 前报 `构建路径权限不可信: .../drivers/n5-src`。
+
+1.5.10 只放宽“随包源码”的目录权限判断，不放宽 headers、工具链、缓存和生成模块的检查。新增回归测试用 0775/0664 模拟 fnOS 应用树，要求 SHA256 正确时能编译、源码篡改和 symlink 仍必须拒绝。
