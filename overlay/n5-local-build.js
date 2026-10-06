@@ -83,6 +83,28 @@ function createLocalBuilder({ appDir, cacheDir, kernel, policy, fs: io = fs,
       return io.readFileSync(fd);
     } finally { io.closeSync(fd); }
   }
+
+  // fnOS 会给 /volX/@appcenter/<app> 添加 group-write/ACL。应用源码和策略都属于
+  // 同一 FPK 信任边界，因此不能套用宿主 Kbuild 的“父目录不可写”规则，否则会在
+  // 真机安装目录误拒。这里仅接受 appDir 内的普通非 symlink 文件，并对实际读取的
+  // 字节做随包 SHA256 校验；宿主 headers/GCC/ld/cache 仍使用 trusted() 严格检查。
+  function packagedSource(file, root, limit = 1024 * 1024) {
+    const appRoot = io.realpathSync(root);
+    const sourceRoot = io.realpathSync(path.join(root, 'drivers', 'n5-src'));
+    if (sourceRoot !== path.join(appRoot, 'drivers', 'n5-src')) {
+      throw new Error('本机编译源码目录必须位于应用安装目录内');
+    }
+    const lst = io.lstatSync(file);
+    if (lst.isSymbolicLink() || !lst.isFile()) throw new Error('本机编译源码必须是普通非符号链接文件');
+    const real = io.realpathSync(file);
+    if (path.dirname(real) !== sourceRoot) throw new Error('本机编译源码越出应用目录');
+    const fd = io.openSync(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const s = io.fstatSync(fd);
+      if (!s.isFile() || s.size < 1 || s.size > limit) throw new Error('本机编译源码大小/类型无效: ' + path.basename(file));
+      return io.readFileSync(fd);
+    } finally { io.closeSync(fd); }
+  }
   function tool(name) {
     for (const dir of tools) {
       try {
@@ -96,12 +118,10 @@ function createLocalBuilder({ appDir, cacheDir, kernel, policy, fs: io = fs,
       throw new Error('安装包缺少有效的本机编译源码策略');
     }
     const dir = path.join(appDir, 'drivers', 'n5-src');
-    trusted(dir, 'dir');
     const out = {};
     for (const name of FILES) {
       const f = path.join(dir, name);
-      if (io.lstatSync(f).isSymbolicLink()) throw new Error('本机编译源码不允许符号链接');
-      const b = read(f, 1024 * 1024);
+      const b = packagedSource(f, appDir);
       if (!/^[a-f0-9]{64}$/.test(cfg.files[name]) || crypto.createHash('sha256').update(b).digest('hex') !== cfg.files[name]) {
         throw new Error('本机编译源码 SHA256 不符: ' + name);
       }
