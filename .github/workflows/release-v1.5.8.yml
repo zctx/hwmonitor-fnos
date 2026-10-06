@@ -1,0 +1,68 @@
+name: Verify live channel and publish reviewed v1.5.8
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/release-v1.5.8.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release-v1.5.8
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Download immutable tested build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 37427034451 --repo "$GITHUB_REPOSITORY" --name hwmonitor-fnos-current --dir dist
+      - name: Reverify actual FPK and live remote path without real insmod
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y kmod
+          (cd dist && sha256sum -c SHA256SUMS)
+          echo '8f772e7237bd4c6b3c8e23508eedfe1b4042acd2efb675f1df40f775d2d8df33  dist/hwmonitor_1.5.8_x86.fpk' | sha256sum -c -
+          grep -Fxq 'adapter_commit=a7aa296cea7a9b8988cc1df5a6d6fa62f9b5dc98' dist/build-info.txt
+          python3 scripts/verify-package.py dist/hwmonitor_1.5.8_x86.fpk
+          mkdir package app
+          tar -xzf dist/hwmonitor_1.5.8_x86.fpk -C package
+          tar -xzf package/app.tgz -C app
+          sudo node validation/channel-live.cjs "$PWD/app" | tee live-channel-test.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v158-live-channel-test
+          path: live-channel-test.log
+          if-no-files-found: error
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Publish tested assets without overwriting existing releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download 37427034451 --repo "$GITHUB_REPOSITORY" --name hwmonitor-fnos-current --dir dist
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name v158-live-channel-test --dir dist
+          (cd dist && sha256sum -c SHA256SUMS)
+          echo '8f772e7237bd4c6b3c8e23508eedfe1b4042acd2efb675f1df40f775d2d8df33  dist/hwmonitor_1.5.8_x86.fpk' | sha256sum -c -
+          gh release create v1.5.8 dist/* --repo "$GITHUB_REPOSITORY" \
+            --target a7aa296cea7a9b8988cc1df5a6d6fa62f9b5dc98 \
+            --title 'hwmonitor-fnos v1.5.8 — reviewed, awaiting NAS validation' \
+            --notes-file releases/v1.5.8.md --draft --prerelease
+          gh release edit v1.5.8 --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          gh release view v1.5.8 --repo "$GITHUB_REPOSITORY" --json tagName,url,isDraft,isPrerelease,assets
