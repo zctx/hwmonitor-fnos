@@ -90,11 +90,13 @@ function sha256File(file) {
 
 function verifyRemoteModule(file, kernel) {
   const modinfo = which(['/usr/sbin/modinfo', '/sbin/modinfo', '/usr/bin/modinfo', '/bin/modinfo']);
-  if (!modinfo) return;
+  if (!modinfo) throw new Error('modinfo not found; refusing remote module');
   const vermagic = execFileSync(modinfo, ['-F', 'vermagic', file], { encoding: 'utf8' }).trim();
   if (!vermagic.startsWith(kernel + ' ')) throw new Error('remote module vermagic mismatch: ' + vermagic);
   const version = execFileSync(modinfo, ['-F', 'version', file], { encoding: 'utf8' }).trim();
   if (version !== '0.2.0') throw new Error('remote module version mismatch: ' + version);
+  const srcversion = execFileSync(modinfo, ['-F', 'srcversion', file], { encoding: 'utf8' }).trim();
+  if (srcversion !== '96E49785C432E4B85FAF416') throw new Error('remote module srcversion mismatch: ' + srcversion);
   const info = execFileSync(modinfo, [file], { encoding: 'utf8' });
   if (!/^parm:.*experimental_write:/m.test(info)) throw new Error('remote module missing experimental_write');
 }
