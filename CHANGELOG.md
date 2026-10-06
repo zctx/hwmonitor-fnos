@@ -8,6 +8,8 @@
 - 新增 fnOS 0775/0664 应用树回归，源码篡改/symlink 拒绝测试继续保留。
 - N5 驱动源码、温度映射、风扇曲线、UI 和远程通道均不修改。
 - 触发问题的实机为 `6.18.18.c1107-trim`，具备完整 build tree、Module.symvers、GCC 12.2.0 和 kmod 30；1.5.9 在 make 前失败，因此本修正专门针对部署权限兼容性。
+- 正式发布前已在 N5A / F8NAB、`6.18.18.c1107-trim` 完成真实本机 Kbuild 与实际模块加载验收：`source=local-build`、driver 0.2.0、srcversion 正确、`experimental_write=Y`、hwmon/PWM 节点完整。
+- 实机 RPM：CPU 1714、SSD 2760、HDD 914 RPM；HDD `pwm3=77` 安全下限生效；最终验收 `FINAL: PASS`。
 
 ## 1.5.8 — 1.5.7 安全与可靠性复核
 
