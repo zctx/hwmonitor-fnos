@@ -2,7 +2,7 @@
 
 Minisforum N5 系列在 fnOS 上使用 `ltdstudio/hwmonitor` 的社区适配构建仓库。不是飞牛或 Minisforum 官方软件。
 
-当前源码版本 **1.5.10**：修复 1.5.9 在 fnOS 实机安装目录下因 group-write/ACL 被误判为“不可信源码路径”，导致本机编译在进入 make 前失败。驱动 C 源码仍锁定上游 **0.2.0**；温度映射、风扇曲线和 UI 不变。
+当前稳定版本 **1.5.10**：修复 1.5.9 在 fnOS 实机安装目录下因 group-write/ACL 被误判为“不可信源码路径”，并已在 N5A / `6.18.18.c1107-trim` 上完成真实本机 Kbuild、模块加载、hwmon/PWM 节点与风扇 RPM 验收。驱动 C 源码仍锁定上游 **0.2.0**；温度映射、风扇曲线和 UI 不变。
 
 [1.5.10 说明](releases/v1.5.10.md) · [本机编译设计](docs/LOCAL-BUILD.md) · [1.5.7 审查](docs/REVIEW-1.5.7.md) · [历史变更](CHANGELOG.md)
 
@@ -10,7 +10,7 @@ Minisforum N5 系列在 fnOS 上使用 `ltdstudio/hwmonitor` 的社区适配构�
 
 FPK 内置 `6.18.18.c1032-trim` 和 `6.18.18.c1126-trim` 的独立模块，按运行内核精确选择。自动适配限定为 x86_64 的 `6.18.18.cNNNN-trim` 系列，不猜测新的基础内核兼容性。N5A / N5 AIR + F8NAB 继续使用上游 `experimental_write=1`；其他机型不扩大写权限。
 
-安装前先执行 `uname -r`。构建和软件回归不能代替 NAS 实测，首次启用曲线控制需要观察 RPM 与温度。
+安装前先执行 `uname -r`。1.5.10 已在 N5A / F8NAB、`6.18.18.c1107-trim` 实机验证本机编译与实际加载；其他内核/机型首次启用曲线控制仍应观察 RPM 与温度。
 
 ## 驱动选择顺序
 
@@ -46,3 +46,16 @@ FPK 内置 `6.18.18.c1032-trim` 和 `6.18.18.c1126-trim` 的独立模块，按�
 - driver commit：`e47545166ac93e3c5769dcaef75ee6ec4dd5d95d`
 
 完整工程归档含驱动源码、许可、覆盖层和测试。遵循各上游许可，驱动为 GPL-2.0-only，不改变作者归属。
+
+
+## 1.5.10 实机验收
+
+已在 N5A / F8NAB、fnOS `6.18.18.c1107-trim` 实机确认：
+
+- `source=local-build`，使用 `/usr/src/linux-headers-6.18.18.c1107-trim` 和 GCC 12.2.0 完成 Kbuild；
+- 驱动 `version=0.2.0`、`srcversion=96E49785C432E4B85FAF416`、`experimental_write=Y`；
+- hwmon 温度、fan1-3 RPM、pwm1-4 / pwm_enable 节点完整；
+- 实测风扇 RPM 均非零，HDD 软件曲线下限 `pwm3=77` 生效；
+- 应用 API 返回 `controller=OK`，整体验收结果 `FINAL: PASS`。
+
+该验收覆盖了 1.5.10 最关键的新路径：未内置的 c1107 → 使用本机现有精确 headers 自动编译 → 严格模块身份校验 → 实际 insmod/probe → hwmon/PWM 正常。
