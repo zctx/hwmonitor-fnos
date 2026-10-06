@@ -355,6 +355,47 @@ s = replace_once(
     "server.js detection source regex",
 )
 
+# Retry exact-kernel driver acquisition after boot when the network or driver
+# channel was not ready yet. Once the module loads, the timer stops.
+s = replace_once(
+    s,
+    """const driverload = require('./driverload');
+let n5Driver = { status: 'not-applicable' };
+try {
+  n5Driver = driverload.autoload(dmiInfo(), appendLog);
+  n5Driver.bundled = driverload.availableBuilds().map(b => b.kernel);
+} catch (e) {
+  n5Driver = { status: 'failed', error: e.message || String(e) };
+}
+""",
+    """const driverload = require('./driverload');
+let n5Driver = { status: 'not-applicable' };
+function loadN5Driver() {
+  try {
+    n5Driver = driverload.autoload(dmiInfo(), appendLog);
+    n5Driver.bundled = driverload.availableBuilds().map(b => b.kernel);
+  } catch (e) {
+    n5Driver = { status: 'failed', error: e.message || String(e) };
+  }
+  return n5Driver;
+}
+loadN5Driver();
+
+let n5DriverRetry = null;
+if (n5Driver.status === 'no-build' || n5Driver.status === 'failed') {
+  n5DriverRetry = setInterval(() => {
+    const r = loadN5Driver();
+    if (r.status === 'loaded' || r.status === 'already-loaded' || r.status === 'not-applicable') {
+      clearInterval(n5DriverRetry);
+      n5DriverRetry = null;
+    }
+  }, 300000);
+  if (n5DriverRetry.unref) n5DriverRetry.unref();
+}
+""",
+    "server.js N5 remote retry",
+)
+
 server.write_text(s, encoding="utf-8")
 
 u = app.read_text(encoding="utf-8")
