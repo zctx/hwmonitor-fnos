@@ -1,0 +1,6 @@
+.work/
+dist/
+dist-driver/
+.headers-info/
+__pycache__/
+*.pyc

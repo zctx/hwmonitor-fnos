@@ -1,174 +1,83 @@
-name: Maintain fnOS kernel module channel
-
+name: Maintain verified kernel module channel v2
 on:
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - .github/workflows/kernel-modules.yml
-      - scripts/build-driver-only.sh
-      - scripts/prepare-fnos-headers.sh
-      - scripts/signforfn.sh
-      - upstream.lock
-
+    paths: ['upstream.lock', '.github/workflows/kernel-modules.yml', 'scripts/channel.py', 'scripts/driver_index.py', 'scripts/fnos_headers.py', 'scripts/build-driver-only.sh', 'scripts/prepare-fnos-headers.sh', 'scripts/signforfn.sh']
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: kernel-modules-v2
+  cancel-in-progress: false
 jobs:
-  maintain:
+  plan:
     runs-on: ubuntu-latest
-    container:
-      image: makedie/fnos:kernHead-baseEnv-amd64
-
+    outputs:
+      kernels: ${{ steps.plan.outputs.kernels }}
+      ref: ${{ steps.plan.outputs.metadata_ref }}
+      image: ${{ steps.plan.outputs.build_image }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Prepare tools
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/channel.py plan plan.json
+  build:
+    needs: plan
+    if: needs.plan.outputs.kernels != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        kernel: ${{ fromJSON(needs.plan.outputs.kernels) }}
+    container:
+      image: ${{ needs.plan.outputs.image }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Compile using immutable metadata snapshot
+        env:
+          TARGET: ${{ matrix.kernel }}
+          META_REF: ${{ needs.plan.outputs.ref }}
         shell: bash
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends git ca-certificates make gcc binutils kmod python3 curl perl coreutils gh
-
-      - name: Discover newest fnOS x86 c-kernel
-        id: discover
-        shell: bash
-        run: |
-          set -euo pipefail
-          API='https://api.github.com/repos/GreenDamTan/DockerFile/contents/fnOS/buildKernelModulesEnv?ref=dev'
-          curl -fL --retry 3 --connect-timeout 15 \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'User-Agent: hwmonitor-fnos' \
-            "$API" -o /tmp/fnos-kernels.json
-          KERNEL=$(python3 - <<'PY'
-          import json, re
-          with open('/tmp/fnos-kernels.json', encoding='utf-8') as f:
-              items = json.load(f)
-          found = []
-          for x in items:
-              m = re.fullmatch(r'6\.18\.18\.c(\d+)-trim_amd64\.dockerfile', x.get('name',''))
-              if m:
-                  found.append((int(m.group(1)), f"6.18.18.c{m.group(1)}-trim"))
-          if not found:
-              raise SystemExit('no supported fnOS c-kernel metadata found')
-          print(max(found)[1])
-          PY
-          )
-          echo "kernel=$KERNEL" | tee -a "$GITHUB_OUTPUT"
-          echo "Newest fnOS kernel metadata: $KERNEL"
-
-      - name: Check rolling channel
-        id: channel
+          apt-get install -y --no-install-recommends git ca-certificates make gcc binutils kmod python3 curl perl
+          bash scripts/prepare-fnos-headers.sh "$TARGET" "$META_REF"
+          bash scripts/build-driver-only.sh "$TARGET" dist-driver
+          cp .headers-info/"$TARGET".txt dist-driver/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: driver-${{ matrix.kernel }}
+          path: dist-driver/
+          retention-days: 7
+  publish:
+    needs: [plan, build]
+    if: always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.kernels != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Get outputs of this exact workflow run
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          KERNEL='${{ steps.discover.outputs.kernel }}'
-          mkdir -p channel verify
-          if gh release view kernel-modules --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release download kernel-modules --repo "$GITHUB_REPOSITORY" -p driver-index.json -D channel || true
-          fi
-          if [ ! -f channel/driver-index.json ]; then
-            printf '%s\n' '{"schema":1,"driver_version":"0.2.0","modules":{}}' > channel/driver-index.json
-          fi
-          ASSET=$(python3 - "$KERNEL" channel/driver-index.json <<'PY'
-          import json, sys
-          k, p = sys.argv[1], sys.argv[2]
-          with open(p, encoding='utf-8') as f:
-              d=json.load(f)
-          e=(d.get('modules') or {}).get(k) or {}
-          print(e.get('asset',''))
-          PY
-          )
-          SHA=$(python3 - "$KERNEL" channel/driver-index.json <<'PY'
-          import json, sys
-          k, p = sys.argv[1], sys.argv[2]
-          with open(p, encoding='utf-8') as f:
-              d=json.load(f)
-          e=(d.get('modules') or {}).get(k) or {}
-          print(e.get('sha256',''))
-          PY
-          )
-          READY=0
-          if [ -n "$ASSET" ] && [ -n "$SHA" ] && gh release view kernel-modules --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            if gh release download kernel-modules --repo "$GITHUB_REPOSITORY" -p "$ASSET" -D verify >/dev/null 2>&1; then
-              GOT=$(sha256sum "verify/$ASSET" | awk '{print $1}')
-              [ "$GOT" = "$SHA" ] && READY=1 || true
-            fi
-          fi
-          echo "ready=$READY" | tee -a "$GITHUB_OUTPUT"
-
-      - name: Prepare exact headers
-        if: steps.channel.outputs.ready != '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/prepare-fnos-headers.sh '${{ steps.discover.outputs.kernel }}'
-
-      - name: Build exact driver
-        if: steps.channel.outputs.ready != '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/build-driver-only.sh '${{ steps.discover.outputs.kernel }}' dist-driver
-
-      - name: Update driver index
-        if: steps.channel.outputs.ready != '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - '${{ steps.discover.outputs.kernel }}' channel/driver-index.json dist-driver/entry.json <<'PY'
-          import datetime, json, sys
-          kernel, idxp, entp = sys.argv[1:]
-          try:
-              with open(idxp, encoding='utf-8') as f: idx=json.load(f)
-          except Exception:
-              idx={'schema':1,'driver_version':'0.2.0','modules':{}}
-          with open(entp, encoding='utf-8') as f: ent=json.load(f)
-          idx['schema']=1
-          idx['driver_version']=ent.get('driver_version','0.2.0')
-          idx.setdefault('modules', {})[kernel]={
-              'asset': ent['asset'],
-              'sha256': ent['sha256'],
-              'driver_version': ent.get('driver_version','0.2.0'),
-              'published_at': datetime.datetime.now(datetime.timezone.utc).isoformat()
-          }
-          idx['updated_at']=datetime.datetime.now(datetime.timezone.utc).isoformat()
-          with open(idxp,'w',encoding='utf-8') as f:
-              json.dump(idx,f,ensure_ascii=False,indent=2,sort_keys=True)
-              f.write('\n')
-          PY
-          cat channel/driver-index.json
-
-      - name: Publish rolling exact-kernel module
-        if: steps.channel.outputs.ready != '1'
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'driver-*' --dir outputs
+      - name: Verify metadata and publish modules before index
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
-          set -euo pipefail
-          KERNEL='${{ steps.discover.outputs.kernel }}'
-          KO="dist-driver/minisforum_n5_it5571-${KERNEL}.ko"
-          if gh release view kernel-modules --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload kernel-modules "$KO" channel/driver-index.json \
-              --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit kernel-modules --repo "$GITHUB_REPOSITORY" \
-              --title 'N5 exact-kernel driver channel' --prerelease
-          else
-            gh release create kernel-modules "$KO" channel/driver-index.json \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title 'N5 exact-kernel driver channel' \
-              --notes 'Rolling exact-kernel modules used by hwmonitor-fnos. Modules are SHA256 and vermagic verified before loading.' \
-              --prerelease
-          fi
-
-      - name: Summary
-        shell: bash
-        run: |
-          echo "kernel=${{ steps.discover.outputs.kernel }}"
-          echo "already_ready=${{ steps.channel.outputs.ready }}"
+          sudo apt-get update
+          sudo apt-get install -y kmod
+          python3 scripts/channel.py publish outputs
