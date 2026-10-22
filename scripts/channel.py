@@ -27,9 +27,13 @@ def check_download_url(url):
     if u.scheme != 'https' or u.hostname not in ALLOWED or u.username or u.password or u.port not in (None,443):
         raise ValueError('Unapproved asset URL')
 
-def public_download(url, limit):
-    check_download_url(url)
-    req=urllib.request.Request(url, headers={'User-Agent':'hwmonitor-fnos','Accept-Encoding':'identity'})
+def asset_download(repo, asset_id, limit):
+    # 同名索引替换后，公共下载 URL 可能仍指向旧资产；按元数据中的 ID 读取同一对象。
+    url=f'{ORIGIN}/repos/{repo}/releases/assets/{asset_id}'
+    req=urllib.request.Request(url, headers={'User-Agent':'hwmonitor-fnos',
+        'Accept':'application/octet-stream','Accept-Encoding':'identity'})
+    # API 可直接返回内容或重定向到资产 CDN；凭据只发送给初始 API 请求。
+    req.add_unredirected_header('Authorization','Bearer '+os.environ['GH_TOKEN'])
     with urllib.request.build_opener(CheckedRedirect()).open(req, timeout=30) as r:
         data=r.read(limit+1)
         if len(data)>limit:
@@ -100,9 +104,11 @@ def state(repo, tag):
             raw=(Path(tmp)/'driver-index.json').read_bytes()
             if len(raw)>512*1024: raise ValueError('Draft index too large')
     else:
-        raw=public_download(f'https://github.com/{repo}/releases/download/{tag}/driver-index.json',512*1024)
-    if a.get('digest')!='sha256:'+hashlib.sha256(raw).hexdigest():
-        raise ValueError('Index asset digest mismatch')
+        raw=asset_download(repo,a['id'],512*1024)
+    actual='sha256:'+hashlib.sha256(raw).hexdigest()
+    if a.get('digest')!=actual:
+        raise ValueError(f"Index asset digest mismatch: asset_id={a['id']} "
+                         f"expected={a.get('digest')} actual={actual}")
     idx=validate_index(json.loads(raw))
     check_assets(idx, assets)
     return release,idx,raw

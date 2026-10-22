@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from driver_index import lock, validate_entry, validate_index, merge_index, make_entry
 from fnos_headers import parse_recipe
-from channel import missing_kernels, check_assets, state, check_download_url, publish
+from channel import missing_kernels, check_assets, state, check_download_url, publish, asset_download, CheckedRedirect
 
 K='6.18.18.c1126-trim'
 CFG=lock()
@@ -97,6 +98,59 @@ class IndexTests(unittest.TestCase):
     def test_real_built_module(self):
         e=make_entry(os.environ['HWMON_TEST_KO'],K)
         self.assertEqual(e['srcversion'],CFG['EXPECTED_DRIVER_SRCVERSION'])
+
+class AssetReadTests(unittest.TestCase):
+    def test_replaced_index_uses_asset_id_when_public_alias_is_stale(self):
+        idx={'schema':2,'modules':{K:entry()}};raw=json.dumps(idx).encode()
+        rel={'draft':False,'assets':[
+            {'id':8,'name':'driver-index.json','digest':'sha256:'+hashlib.sha256(raw).hexdigest()},
+            {'name':entry()['asset'],'state':'uploaded','size':128,'digest':'sha256:'+'a'*64}]}
+        api_url='https://api.github.com/repos/zctx/hwmonitor-fnos/releases/assets/8'
+        alias='https://github.com/zctx/hwmonitor-fnos/releases/download/kernel-modules-v2/driver-index.json'
+        # 模拟元数据已更新，但按名称下载仍返回旧索引。
+        bodies={api_url:raw,alias:b'{"schema":2,"modules":{}}'}
+        with patch.dict(os.environ,{'GH_TOKEN':'test-token'}), \
+             patch('channel.api',return_value=rel),patch('channel.urllib.request.build_opener') as build:
+            build.return_value.open.side_effect=lambda req,**kw: io.BytesIO(bodies[req.full_url])
+            self.assertEqual(state('zctx/hwmonitor-fnos','kernel-modules-v2'),(rel,idx,raw))
+            req=build.return_value.open.call_args.args[0]
+            self.assertEqual(req.full_url,api_url)
+            self.assertEqual(req.get_header('Accept'),'application/octet-stream')
+            self.assertEqual(req.get_header('Authorization'),'Bearer test-token')
+
+    def test_wrong_asset_bytes_still_fail_with_diagnostics(self):
+        expected=b'{"schema":2,"modules":{}}';wrong=expected+b'\n'
+        digest='sha256:'+hashlib.sha256(expected).hexdigest()
+        rel={'draft':False,'assets':[{'id':8,'name':'driver-index.json','digest':digest}]}
+        with patch('channel.api',return_value=rel),patch('channel.asset_download',return_value=wrong), \
+             patch('channel.validate_index') as validate:
+            with self.assertRaisesRegex(ValueError,'Index asset digest mismatch: asset_id=8') as cm:
+                state('zctx/hwmonitor-fnos','kernel-modules-v2')
+            self.assertIn('expected='+digest,str(cm.exception))
+            self.assertIn('actual=sha256:'+hashlib.sha256(wrong).hexdigest(),str(cm.exception))
+            validate.assert_not_called()
+
+    def test_asset_download_keeps_size_limit(self):
+        with patch.dict(os.environ,{'GH_TOKEN':'test-token'}), \
+             patch('channel.urllib.request.build_opener') as build:
+            build.return_value.open.return_value=io.BytesIO(b'12345')
+            with self.assertRaisesRegex(ValueError,'Asset too large'):
+                asset_download('zctx/hwmonitor-fnos',8,4)
+
+    def test_asset_redirect_drops_token_and_rejects_unapproved_hosts(self):
+        with patch.dict(os.environ,{'GH_TOKEN':'test-token'}), \
+             patch('channel.urllib.request.build_opener') as build:
+            build.return_value.open.return_value=io.BytesIO(b'index')
+            asset_download('zctx/hwmonitor-fnos',8,512*1024)
+            req=build.return_value.open.call_args.args[0]
+            handler=build.call_args.args[0]
+            self.assertIsInstance(handler,CheckedRedirect)
+            redirected=handler.redirect_request(req,None,302,'Found',{},
+                'https://release-assets.githubusercontent.com/asset')
+            self.assertIsNone(redirected.get_header('Authorization'))
+            for url in ['https://evil.example/asset','http://release-assets.githubusercontent.com/asset']:
+                with self.subTest(url=url),self.assertRaisesRegex(ValueError,'Unapproved asset URL'):
+                    handler.redirect_request(req,None,302,'Found',{},url)
 
 class ApplicationTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('HWMON_TEST_APP'),'requires patched upstream app')
