@@ -160,11 +160,15 @@ function createLoader(options = {}) {
     }
     io.chmodSync(target, 0o700);
   }
-  function secureRead(file, limit) {
+  function secureRead(file, limit, packaged = false) {
     const fd = io.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
       const st = io.fstatSync(fd);
-      if (!st.isFile() || st.uid !== owner || (st.mode & 0o022) || st.nlink !== 1 || st.size > limit) {
+      // fnOS 可把随包文件安装为 0775。内置模块不直接 insmod：
+      // 先读入内存、复制到 root 私有文件，再对该副本验证 SHA256/ELF/modinfo。
+      // 远程/本机缓存和临时校验文件仍拒绝 group/other 写权限。
+      if (!st.isFile() || st.uid !== owner || (!packaged && (st.mode & 0o022)) ||
+          st.nlink !== 1 || st.size < 64 || st.size > limit) {
         throw new Error('驱动文件类型/权限/大小无效: ' + path.basename(file));
       }
       return io.readFileSync(fd);
@@ -262,10 +266,22 @@ function createLoader(options = {}) {
   async function candidate(log) {
     const entry = policy.bundled[kernel];
     if (entry) {
-      validateEntry(entry, kernel, policy);
-      const file = path.join(bundle, entry.asset);
-      await verify(file, entry);
-      return { file, source: 'bundled' };
+      let staged = null;
+      try {
+        validateEntry(entry, kernel, policy);
+        // fnOS 的 app 文件允许 group-write；绝不直接对该可变路径执行 insmod。
+        const bytes = secureRead(path.join(bundle, entry.asset), MAX_MODULE, true);
+        privateCache();
+        staged = temporary('.ko');
+        writeNew(staged, bytes);
+        await verify(staged, entry);
+        // 只返回 root 私有的、已验证的副本，加载结束后删除。
+        return { file: staged, source: 'bundled', disposable: true };
+      } catch (e) {
+        remove(staged);
+        guard();
+        if (log) log('N5 内置模块未通过校验，继续尝试本机/远程路径: ' + e.message);
+      }
     }
     const local = await localCandidate(log);
     guard();
@@ -317,9 +333,10 @@ function createLoader(options = {}) {
       return error ? { status: 'failed', kernel, retryable: false, error } :
         { status: 'already-loaded', kernel, retryable: false, writable: p.write };
     }
+    let item = null;
     try {
       guard();
-      const item = await candidate(log);
+      item = await candidate(log);
       guard();
       if (!item) return { status: 'no-build', kernel, retryable: remote, remote, have: Object.keys(policy.bundled) };
       // 异步下载期间可能已有其他程序加载；不抢占/卸载他人的模块。
@@ -342,7 +359,9 @@ function createLoader(options = {}) {
       return { status: 'loaded', kernel, file: path.basename(item.file), source: item.source, retryable: false, writable: p.write };
     } catch (e) {
       if (log && !stopped) log('N5 加载失败: ' + e.message);
-      return { status: 'failed', kernel, retryable: !stopped && remote && !policy.bundled[kernel] && !moduleLoaded(), error: e.message };
+      return { status: 'failed', kernel, retryable: !stopped && remote && !moduleLoaded(), error: e.message };
+    } finally {
+      if (item && item.disposable) remove(item.file);
     }
   }
   function autoload(dmi, log) {
