@@ -71,6 +71,14 @@ test('local build takes priority over remote channel and can operate with remote
 test('bundled module never triggers local compiler',async t=>{
  const f=fixture(t,{localBuild:true,bundled:true});assert.equal((await f.load()).source,'bundled');assert.equal(f.state.builds,undefined);
 });
+test('invalid bundled module falls back to local build before remote',async t=>{
+ const f=fixture(t,{localBuild:true,bundled:true,remote:false});
+ fs.appendFileSync(path.join(f.app,'drivers','n5',f.entry.asset),'tampered');
+ const r=await f.load();
+ assert.equal(r.source,'local-build');assert.equal(r.local_build.status,'compiled');
+ assert.equal(f.state.builds,1);assert.equal(f.state.downloads.length,0);
+});
+
 test('local cache reload revalidates but does not compile a second time',async t=>{
  const f=fixture(t,{localBuild:true,remote:false});await f.load();f.state.loaded=false;f.state.runs=[];
  assert.equal((await f.load()).source,'local-cache');assert.equal(f.state.builds,1);
