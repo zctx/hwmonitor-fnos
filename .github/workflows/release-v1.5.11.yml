@@ -1,0 +1,84 @@
+name: Publish v1.5.11 bundled-driver fix (prerelease)
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/release-v1.5.11.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-v1.5.11
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: fe0172d144a6c3d8264f673a227b806b0f74bff8
+          persist-credentials: false
+      - name: Download exact tested main build and verify SHA256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/41464627451" > /tmp/build-run.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/build-run.json'))
+          assert x['head_sha']=='fe0172d144a6c3d8264f673a227b806b0f74bff8'
+          assert x['event']=='push'
+          assert x['status']=='completed' and x['conclusion']=='success'
+          PY
+          gh run download 41464627451 --repo "$GITHUB_REPOSITORY" --name hwmonitor-fnos-current --dir dist
+          grep -Fx 'adapter_commit=fe0172d144a6c3d8264f673a227b806b0f74bff8' dist/build-info.txt
+          grep -Fx 'package_version=1.5.11' dist/build-info.txt
+          printf '%s\n' '58d6e13e81068f57c35a78ff5a45b0faee67e4ba92d8fb074a82bc4402603ceb  dist/hwmonitor_1.5.11_x86.fpk' | sha256sum -c -
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Verify FPK contents and loader behavior check
+        run: |
+          set -euo pipefail
+          if ! command -v modinfo >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y kmod
+          fi
+          python3 scripts/verify-package.py dist/hwmonitor_1.5.11_x86.fpk
+          mkdir -p /tmp/fpk-root /tmp/fpk-app
+          tar -xzf dist/hwmonitor_1.5.11_x86.fpk -C /tmp/fpk-root app.tgz
+          tar -xzf /tmp/fpk-root/app.tgz -C /tmp/fpk-app
+          grep -Fq '内置模块未通过校验，继续尝试本机/远程路径' /tmp/fpk-app/driverload.js
+          grep -Fq 'disposable: true' /tmp/fpk-app/driverload.js
+          node --check /tmp/fpk-app/driverload.js
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: fe0172d144a6c3d8264f673a227b806b0f74bff8
+          persist-credentials: false
+      - name: Publish tested artifacts without overwriting older versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download 41464627451 --repo "$GITHUB_REPOSITORY" --name hwmonitor-fnos-current --dir dist
+          printf '%s\n' '58d6e13e81068f57c35a78ff5a45b0faee67e4ba92d8fb074a82bc4402603ceb  dist/hwmonitor_1.5.11_x86.fpk' | sha256sum -c -
+          (cd dist && sha256sum -c SHA256SUMS)
+          gh release create v1.5.11 dist/* --repo "$GITHUB_REPOSITORY" \
+            --target fe0172d144a6c3d8264f673a227b806b0f74bff8 \
+            --title 'hwmonitor-fnos v1.5.11 — bundled module fix (NAS verification pending)' \
+            --notes-file releases/v1.5.11.md --prerelease --latest=false
+          gh release view v1.5.11 --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,url,assets
