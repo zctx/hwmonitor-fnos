@@ -1,0 +1,54 @@
+name: Promote v1.5.11 stable
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/promote-v1.5.11-stable.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: promote-v1.5.11-stable
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Validate immutable release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view v1.5.11 --repo "$GITHUB_REPOSITORY"             --json tagName,isDraft,isPrerelease,assets > /tmp/v1511.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/v1511.json'))
+          assert d['tagName']=='v1.5.11' and d['isDraft'] is False
+          names={a['name'] for a in d['assets']}
+          assert {'hwmonitor_1.5.11_x86.fpk','SHA256SUMS','build-info.txt','hwmonitor-fnos-1.5.11-source.tar.gz'} <= names
+          PY
+          mkdir -p /tmp/v1511
+          gh release download v1.5.11 --repo "$GITHUB_REPOSITORY"             -p hwmonitor_1.5.11_x86.fpk -D /tmp/v1511
+          printf '%s\n' '58d6e13e81068f57c35a78ff5a45b0faee67e4ba92d8fb074a82bc4402603ceb  /tmp/v1511/hwmonitor_1.5.11_x86.fpk' | sha256sum -c -
+      - name: Promote release without modifying assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit v1.5.11 --repo "$GITHUB_REPOSITORY"             --title 'hwmonitor-fnos v1.5.11'             --notes-file releases/v1.5.11.md             --prerelease=false             --latest
+      - name: Verify stable and latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view v1.5.11 --repo "$GITHUB_REPOSITORY"             --json tagName,isDraft,isPrerelease,url,assets > /tmp/v1511-stable.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/v1511-stable.json'))
+          assert d['tagName']=='v1.5.11' and d['isDraft'] is False and d['isPrerelease'] is False
+          print(d['url'])
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' | grep -Fx 'v1.5.11'
