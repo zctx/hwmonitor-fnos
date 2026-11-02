@@ -67,10 +67,39 @@ test('bundled module is hashed and metadata-checked before insmod',async t=>{
  const f=fixture(t,{bundled:true});assert.equal((await f.load()).status,'loaded');
  assert.deepEqual(f.state.runs.map(x=>x[0]),['modinfo','insmod']);
  assert.equal(f.state.downloads.length,0);assert.equal(f.state.runs[1][2],'experimental_write=1');
+ const insmodFile=f.state.runs[1][1];
+ assert.ok(insmodFile.startsWith(f.cache+path.sep),'insmod must use protected staging, never the fnOS app directory');
+ assert.equal(fs.existsSync(insmodFile),false,'staged .ko must be cleaned up after loading');
 });
-test('bundled bytes tampered: refuse load',async t=>{
- const f=fixture(t,{bundled:true});fs.appendFileSync(path.join(f.app,'drivers','n5',f.entry.asset),'bad');
- assert.equal((await f.load()).status,'failed');assert.equal(f.state.runs.length,0);
+test('fnOS 0775 bundled module is accepted via verified root-owned staging',async t=>{
+ const f=fixture(t,{bundled:true,remote:false});
+ const file=path.join(f.app,'drivers','n5',f.entry.asset);
+ fs.chmodSync(file,0o775);fs.chmodSync(path.dirname(file),0o775);
+ const r=await f.load();
+ assert.equal(r.status,'loaded');assert.equal(r.source,'bundled');
+ assert.equal(f.state.runs[0][0],'modinfo');
+ assert.ok(f.state.runs[0][1].startsWith(f.cache+path.sep));
+ assert.equal(f.state.runs[1][1],f.state.runs[0][1]);
+ assert.equal(fs.existsSync(f.state.runs[0][1]),false);
+ assert.equal(f.state.downloads.length,0);
+});
+test('bundled bytes tampered: refuse load when no fallback enabled',async t=>{
+ const f=fixture(t,{bundled:true,remote:false});fs.appendFileSync(path.join(f.app,'drivers','n5',f.entry.asset),'bad');
+ assert.equal((await f.load()).status,'no-build');assert.equal(f.state.runs.length,0);
+ assert.ok(f.state.logs.some(x=>x.includes('内置模块未通过校验')));
+});
+test('broken bundled module fails over to remote when local is absent',async t=>{
+ const f=fixture(t,{bundled:true});
+ fs.appendFileSync(path.join(f.app,'drivers','n5',f.entry.asset),'bad');
+ const r=await f.load();
+ assert.equal(r.source,'remote');
+ assert.equal(f.state.runs.at(-1)[0],'insmod');
+ assert.ok(f.state.logs.some(x=>x.includes('继续尝试')));
+});
+test('missing bundled file falls back to remote and is not fatal',async t=>{
+ const f=fixture(t,{bundled:true});
+ fs.unlinkSync(path.join(f.app,'drivers','n5',f.entry.asset));
+ assert.equal((await f.load()).source,'remote');
 });
 test('remote first install uses .ko temporary file and checks health',async t=>{
  const f=fixture(t);assert.equal((await f.load()).source,'remote');
